@@ -17,48 +17,13 @@ docker compose build
 
 ### 2. Add the shell alias
 
-Add this function to your `~/.zshrc`:
+Add this to your `~/.zshrc`:
 
 ```bash
-# Claude Code Sandbox - runs in Docker with current directory mounted
-claude-sandbox() {
-  local yolo_flag=""
-  local firewalled=false
-  local args=()
-
-  for arg in "$@"; do
-    case "$arg" in
-      --yolo)
-        yolo_flag="--dangerously-skip-permissions"
-        ;;
-      --firewalled)
-        firewalled=true
-        ;;
-      *)
-        args+=("$arg")
-        ;;
-    esac
-  done
-
-  local project_name="${PWD##*/}"
-  local docker_args=(
-    --rm -it
-    -v "$(pwd):/workspaces/${project_name}"
-    -w "/workspaces/${project_name}"
-    -v claude-sandbox-config:/home/claude/.claude
-    -e TERM=xterm-256color
-  )
-
-  if $firewalled; then
-    docker_args+=(--cap-add=NET_ADMIN -e ENABLE_FIREWALL=1 --user root)
-    docker run "${docker_args[@]}" local/claude-sandbox \
-      /opt/entrypoint.sh $yolo_flag "${args[@]}"
-  else
-    docker run "${docker_args[@]}" local/claude-sandbox \
-      claude $yolo_flag "${args[@]}"
-  fi
-}
+alias claude-sandbox="/path/to/claude-sandbox/run_sandbox.sh"
 ```
+
+Replace `/path/to/claude-sandbox` with the actual path to this repository.
 
 Then reload your shell:
 
@@ -117,3 +82,16 @@ Use the `--firewalled` flag to restrict network access to essential domains only
 - GitHub
 
 This prevents data exfiltration to unauthorized servers while still allowing Claude to fetch docs and install packages.
+
+## Project structure
+
+```
+claude-sandbox/
+├── README.md
+├── docker-compose.yml
+├── run_sandbox.sh          # Main entry point script
+└── sandbox/
+    ├── Dockerfile
+    ├── entrypoint.sh
+    └── init-firewall.sh
+```

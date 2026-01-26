@@ -1,4 +1,4 @@
 services:
   claude-sandbox:
-    build: .
+    build: sandbox/
     image: local/claude-sandbox
