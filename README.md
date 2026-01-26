@@ -71,6 +71,7 @@ claude-sandbox --resume
 - The container runs as non-root user `claude` for safety
 - Full network access is available (for web searches, docs, git, etc.)
 - Filesystem access is isolated to the mounted directory
+- Host services are accessible via `host.docker.internal` (e.g., `host.docker.internal:5432` for a local PostgreSQL)
 
 ## Network restrictions
 

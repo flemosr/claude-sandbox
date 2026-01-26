@@ -28,6 +28,7 @@ docker_args=(
   -w "/workspaces/${project_name}"
   -v claude-sandbox-config:/home/claude/.claude
   -e TERM=xterm-256color
+  --add-host=host.docker.internal:host-gateway
 )
 
 if $firewalled; then
