@@ -2,20 +2,3 @@ services:
   claude-sandbox:
     build: .
     image: local/claude-sandbox
-    container_name: claude-sandbox
-    stdin_open: true
-    tty: true
-    volumes:
-      # Persist Claude Code settings between sessions
-      - claude-config:/home/claude/.claude
-      # Persist shell history
-      - claude-history:/home/claude/.bash_history
-    environment:
-      - TERM=xterm-256color
-    # For firewall rules (optional - requires privileged mode)
-    # cap_add:
-    #   - NET_ADMIN
-
-volumes:
-  claude-config:
-  claude-history:

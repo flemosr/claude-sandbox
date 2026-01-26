@@ -23,22 +23,38 @@ Add this function to your `~/.zshrc`:
 # Claude Code Sandbox - runs in Docker with current directory mounted
 claude-sandbox() {
   local yolo_flag=""
+  local firewalled=false
   local args=()
 
   for arg in "$@"; do
-    if [[ "$arg" == "--yolo" ]]; then
-      yolo_flag="--dangerously-skip-permissions"
-    else
-      args+=("$arg")
-    fi
+    case "$arg" in
+      --yolo)
+        yolo_flag="--dangerously-skip-permissions"
+        ;;
+      --firewalled)
+        firewalled=true
+        ;;
+      *)
+        args+=("$arg")
+        ;;
+    esac
   done
 
-  docker run --rm -it \
-    -v "$(pwd):/home/claude/workspace" \
-    -v claude-sandbox-config:/home/claude/.claude \
-    -e TERM=xterm-256color \
-    local/claude-sandbox \
-    claude $yolo_flag "${args[@]}"
+  local docker_args=(
+    --rm -it
+    -v "$(pwd):/home/claude/workspace"
+    -v claude-sandbox-config:/home/claude/.claude
+    -e TERM=xterm-256color
+  )
+
+  if $firewalled; then
+    docker_args+=(--cap-add=NET_ADMIN -e ENABLE_FIREWALL=1 --user root)
+    docker run "${docker_args[@]}" local/claude-sandbox \
+      /opt/entrypoint.sh $yolo_flag "${args[@]}"
+  else
+    docker run "${docker_args[@]}" local/claude-sandbox \
+      claude $yolo_flag "${args[@]}"
+  fi
 }
 ```
 
@@ -67,7 +83,13 @@ claude-sandbox
 # YOLO mode (no permission prompts)
 claude-sandbox --yolo
 
-# YOLO mode with a prompt
+# Firewalled mode (restricted network access)
+claude-sandbox --firewalled
+
+# YOLO + firewalled (maximum isolation)
+claude-sandbox --yolo --firewalled
+
+# With a prompt
 claude-sandbox --yolo -p "fix the tests"
 
 # Pass any claude arguments
@@ -82,6 +104,13 @@ claude-sandbox --resume
 - Full network access is available (for web searches, docs, git, etc.)
 - Filesystem access is isolated to the mounted directory
 
-## Optional: Network restrictions
+## Network restrictions
 
-If you want to restrict network access to only essential domains, uncomment the `cap_add` section in `docker-compose.yml` and run `init-firewall.sh` on container startup.
+Use the `--firewalled` flag to restrict network access to essential domains only:
+
+- Anthropic API (api.anthropic.com, claude.ai)
+- JavaScript/TypeScript (npm, Yarn, nodejs.org)
+- Rust (crates.io, docs.rs, rust-lang.org)
+- GitHub
+
+This prevents data exfiltration to unauthorized servers while still allowing Claude to fetch docs and install packages.

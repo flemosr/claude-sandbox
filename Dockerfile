@@ -11,8 +11,6 @@ RUN apt-get update && apt-get install -y \
     jq \
     ripgrep \
     fd-find \
-    python3 \
-    python3-pip \
     build-essential \
     zsh \
     fzf \
@@ -27,22 +25,29 @@ RUN useradd -m -s /bin/bash claude \
     && mkdir -p /home/claude/.local/bin \
     && chown -R claude:claude /home/claude
 
-# Switch to claude user for Claude Code installation
+# Switch to claude user for tool installation
 USER claude
 WORKDIR /home/claude
+
+# Install Rust stable
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
 # Install Claude Code using the official native installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Add Claude to PATH
-ENV PATH="/home/claude/.local/bin:${PATH}"
+# Add Claude and Cargo to PATH
+ENV PATH="/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
 
-# Create workspace directory
-RUN mkdir -p /home/claude/workspace
+# Create workspace and config directories
+RUN mkdir -p /home/claude/workspace /home/claude/.claude
 
-# Set up Claude Code config directory
-RUN mkdir -p /home/claude/.claude
+# Copy firewall and entrypoint scripts (after installs to preserve cache)
+USER root
+COPY init-firewall.sh /opt/init-firewall.sh
+COPY entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/init-firewall.sh /opt/entrypoint.sh
 
+USER claude
 WORKDIR /home/claude/workspace
 
 # Default command

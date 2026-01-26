@@ -12,10 +12,20 @@ ALLOWED_DOMAINS=(
     "statsig.anthropic.com"
     "sentry.io"
 
-    # Package registries
+    # JavaScript/TypeScript
     "registry.npmjs.org"
-    "pypi.org"
-    "files.pythonhosted.org"
+    "npmjs.com"
+    "yarnpkg.com"
+    "registry.yarnpkg.com"
+    "nodejs.org"
+
+    # Rust
+    "crates.io"
+    "static.crates.io"
+    "index.crates.io"
+    "doc.rust-lang.org"
+    "docs.rs"
+    "static.rust-lang.org"
 
     # GitHub (for cloning repos, etc.)
     "github.com"
