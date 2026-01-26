@@ -62,11 +62,7 @@ for domain in "${ALLOWED_DOMAINS[@]}"; do
     done
 done
 
-# Allow HTTPS and HTTP to resolved IPs
-iptables -A OUTPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT
-
-# Default deny (optional - uncomment for strict mode)
-# iptables -A OUTPUT -j DROP
+# Default deny - block everything else
+iptables -A OUTPUT -j DROP
 
 echo "Firewall setup complete!"
