@@ -62,8 +62,8 @@ RUN python3 -m venv ~/.local/browser-venv && \
 
 # Copy browser tools
 COPY --chown=claude:claude browser-tools/ /home/claude/.local/browser-tools/
-RUN chmod +x /home/claude/.local/browser-tools/browser && \
-    ln -sf /home/claude/.local/browser-tools/browser /home/claude/.local/bin/browser
+RUN chmod +x /home/claude/.local/browser-tools/browser.sh && \
+    ln -sf /home/claude/.local/browser-tools/browser.sh /home/claude/.local/bin/browser
 
 # Create persistent volume directory structure
 # All persistent data goes in persist which is mounted from a single Docker volume

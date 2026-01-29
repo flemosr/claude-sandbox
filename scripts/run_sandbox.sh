@@ -5,6 +5,7 @@ set -e
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 yolo_flag=""
 firewalled=false
@@ -42,21 +43,21 @@ mkdir -p "$(pwd)/.claude/sessions"
 project_name="${PWD##*/}"
 
 # Source config.sh (required)
-if [ ! -f "$SCRIPT_DIR/config.sh" ]; then
-  echo "Error: No config file found in $SCRIPT_DIR"
+if [ ! -f "$REPO_ROOT/config.sh" ]; then
+  echo "Error: No config file found in $REPO_ROOT"
   echo ""
   echo "Please create config.sh from the template:"
   echo ""
-  echo "  cd $SCRIPT_DIR"
+  echo "  cd $REPO_ROOT"
   echo "  cp config.template.sh config.sh"
   echo ""
   echo "Then edit config.sh with your settings."
   exit 1
 fi
-source "$SCRIPT_DIR/config.sh"
+source "$REPO_ROOT/config.sh"
 
 if [ -z "$CHROME_LOG_FILE" ]; then
-  echo "Error: CHROME_LOG_FILE not set in $SCRIPT_DIR/config.sh"
+  echo "Error: CHROME_LOG_FILE not set in $REPO_ROOT/config.sh"
   exit 1
 fi
 
@@ -83,7 +84,7 @@ if $chrome_enabled; then
 
   # Validate Chrome-specific config (config.sh already sourced above)
   if [ -z "$CHROME_DEBUG_PORT" ]; then
-    echo "Error: CHROME_DEBUG_PORT not set in $SCRIPT_DIR/config.sh"
+    echo "Error: CHROME_DEBUG_PORT not set in $REPO_ROOT/config.sh"
     exit 1
   fi
 

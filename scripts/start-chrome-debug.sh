@@ -21,16 +21,17 @@ set -e
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Find config file
-if [ -f "$SCRIPT_DIR/config.sh" ]; then
-    CONFIG_FILE="$SCRIPT_DIR/config.sh"
+if [ -f "$REPO_ROOT/config.sh" ]; then
+    CONFIG_FILE="$REPO_ROOT/config.sh"
 else
-    echo "Error: No config file found in $SCRIPT_DIR"
+    echo "Error: No config file found in $REPO_ROOT"
     echo ""
     echo "Please create config.sh from the template:"
     echo ""
-    echo "  cd $SCRIPT_DIR"
+    echo "  cd $REPO_ROOT"
     echo "  cp config.template.sh config.sh"
     echo ""
     echo "Then edit config.sh with your Chrome profile (check chrome://version)."
