@@ -30,9 +30,10 @@ RUN apt-get update && apt-get install -y \
     strace \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yq (YAML processor)
-RUN curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq \
-    && chmod +x /usr/local/bin/yq
+# Install yq (YAML processor) - detect architecture
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${ARCH}" -o /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq
 
 # Create a non-root user for safety
 RUN useradd -m -s /bin/bash claude \
@@ -51,6 +52,18 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Add Claude and Cargo to PATH
 ENV PATH="/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
+
+# Install browser tools (Playwright for CDP connection to host Chrome)
+# Also install Python linters (pyright, ruff) for script development
+RUN python3 -m venv ~/.local/browser-venv && \
+    ~/.local/browser-venv/bin/pip install playwright pyright ruff && \
+    ln -sf ~/.local/browser-venv/bin/pyright ~/.local/bin/pyright && \
+    ln -sf ~/.local/browser-venv/bin/ruff ~/.local/bin/ruff
+
+# Copy browser tools
+COPY --chown=claude:claude browser-tools/ /home/claude/.local/browser-tools/
+RUN chmod +x /home/claude/.local/browser-tools/browser && \
+    ln -sf /home/claude/.local/browser-tools/browser /home/claude/.local/bin/browser
 
 # Create persistent volume directory structure
 # All persistent data goes in persist which is mounted from a single Docker volume
@@ -75,12 +88,12 @@ COPY init-firewall.sh /opt/init-firewall.sh
 COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/init-firewall.sh /opt/entrypoint.sh
 
-# Copy global context file for Claude Code
-COPY agent-context.md /home/claude/persist/.claude/CLAUDE.md
-RUN chown claude:claude /home/claude/persist/.claude/CLAUDE.md
+# Copy global context file to non-volume location (source of truth for entrypoint)
+COPY agent-context.md /opt/agent-context.md
 
-USER claude
+# Run as root by default so entrypoint can set up firewall if needed
+# Entrypoint drops privileges to claude user for running claude
 WORKDIR /workspaces
 
-# Default command
-CMD ["bash"]
+ENTRYPOINT ["/opt/entrypoint.sh"]
+CMD []
