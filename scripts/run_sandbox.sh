@@ -96,8 +96,8 @@ if $chrome_enabled; then
 
   echo "Starting Chrome with remote debugging..."
   echo "Chrome logs: $CHROME_LOG_FILE"
-  # start-chrome-debug.sh tees its own output to $CHROME_LOG_FILE
-  "$SCRIPT_DIR/start-chrome-debug.sh" &
+  # Use --quiet to log to file only (no stdout mixing with Docker output)
+  "$SCRIPT_DIR/start-chrome-debug.sh" --quiet &
   CHROME_PID=$!
 
   # Wait for Chrome to be ready

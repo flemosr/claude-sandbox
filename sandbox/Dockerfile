@@ -47,11 +47,20 @@ WORKDIR /home/claude
 # Install Rust stable
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
+# Install nvm and Node.js LTS
+ENV NVM_DIR="/home/claude/.nvm"
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
+    && . "$NVM_DIR/nvm.sh" \
+    && nvm install --lts \
+    && nvm use --lts \
+    && nvm alias default lts/* \
+    && ln -sf "$NVM_DIR/versions/node/$(nvm current)" "$NVM_DIR/current"
+
 # Install Claude Code using the official native installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Add Claude and Cargo to PATH
-ENV PATH="/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
+# Add Claude, Cargo, and Node to PATH (using symlinked current node)
+ENV PATH="/home/claude/.nvm/current/bin:/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
 
 # Install browser tools (Playwright for CDP connection to host Chrome)
 # Also install Python linters (pyright, ruff) for script development
@@ -77,6 +86,12 @@ RUN mv /home/claude/.claude.json /home/claude/persist/.claude.json 2>/dev/null |
 RUN rm -rf /home/claude/.claude \
     && ln -sf /home/claude/persist/.claude /home/claude/.claude \
     && ln -sf /home/claude/persist/.claude.json /home/claude/.claude.json
+
+# Backup nvm to template location for volume initialization
+# This allows the entrypoint to seed the persistent volume on first run
+USER root
+RUN cp -a /home/claude/.nvm /opt/nvm-template
+USER claude
 
 # Copy firewall and entrypoint scripts (after installs to preserve cache)
 USER root

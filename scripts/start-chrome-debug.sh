@@ -12,6 +12,7 @@
 #   ./start-chrome-debug.sh --port 9333        # Override port
 #   ./start-chrome-debug.sh --profile Default  # Override Chrome profile
 #   ./start-chrome-debug.sh --restart          # Kill running Chrome and restart with debugging
+#   ./start-chrome-debug.sh --quiet            # Log to file only (no stdout)
 #
 # Profile names are folder names in ~/Library/Application Support/Google/Chrome/
 # Common values: "Default", "Profile 1", "Profile 2", etc.
@@ -61,6 +62,7 @@ if [ ${#missing_config[@]} -gt 0 ]; then
 fi
 
 RESTART=false
+QUIET=false
 
 # Parse arguments (override config file settings)
 while [[ $# -gt 0 ]]; do
@@ -77,9 +79,13 @@ while [[ $# -gt 0 ]]; do
             RESTART=true
             shift
             ;;
+        --quiet|-q)
+            QUIET=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--port PORT] [--profile CHROME_PROFILE_DIR] [--restart]"
+            echo "Usage: $0 [--port PORT] [--profile CHROME_PROFILE_DIR] [--restart] [--quiet]"
             exit 1
             ;;
     esac
@@ -124,9 +130,15 @@ if pgrep -x "Google Chrome" >/dev/null 2>&1; then
     fi
 fi
 
-# Truncate log file for fresh start, then tee all output
+# Truncate log file for fresh start, then redirect output
 : > "$CHROME_LOG_FILE"
-exec > >(tee "$CHROME_LOG_FILE") 2>&1
+if $QUIET; then
+    # Log to file only (used when launched from run_sandbox.sh)
+    exec > "$CHROME_LOG_FILE" 2>&1
+else
+    # Tee to both file and stdout (interactive use)
+    exec > >(tee "$CHROME_LOG_FILE") 2>&1
+fi
 
 # Check for socat (required for Docker connectivity)
 if ! command -v socat &> /dev/null; then
