@@ -137,9 +137,11 @@ docker_args=(
 # Pass git identity env vars if configured
 if [ -n "$GIT_AUTHOR_NAME" ]; then
   docker_args+=(-e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME")
+  docker_args+=(-e "GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME")
 fi
 if [ -n "$GIT_AUTHOR_EMAIL" ]; then
   docker_args+=(-e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL")
+  docker_args+=(-e "GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL")
 fi
 if [ "$GPG_SIGNING" = "true" ]; then
   docker_args+=(-e "GPG_SIGNING=true")
