@@ -85,27 +85,23 @@ GPG_SIGNING=true
 On first launch, the sandbox generates a passphrase-less ed25519 GPG key and prints the public key.
 Add it to your GitHub account at **Settings > SSH and GPG keys > New GPG key**.
 
-The key is persisted in the Docker volume, so it survives container restarts. To export the key for
-use on another machine:
+The key is persisted in the Docker volume, so it survives container restarts and image rebuilds.
+
+To export the key (e.g., for use on another machine or as a backup):
 
 ```bash
-docker run --rm -v claude-sandbox:/data -v "$(pwd):/output" local/claude-sandbox \
-  bash -c 'gpg --homedir /data/.gnupg --export-secret-keys --armor > /output/my-key-backup.asc'
+claude-sandbox gpg-export --file my-key-backup.asc
 ```
 
-This creates `my-key-backup.asc` in your current directory. **This file contains your sandbox private key —
-do not commit or share it.**
+**The exported file contains your private key — do not commit or share it.**
 
-To restore a backed-up key into the sandbox:
+To import a previously exported key into the sandbox:
 
 ```bash
-docker run --rm -v claude-sandbox:/data -v "$(pwd):/input" local/claude-sandbox \
-  bash -c 'gpg --homedir /data/.gnupg --import /input/my-key-backup.asc'
+claude-sandbox gpg-import --file gpg-key-backup.asc
 ```
 
 ## Usage
-
-The CLI has two main commands:
 
 ### Run the sandbox
 
@@ -162,6 +158,22 @@ claude-sandbox start-chrome --restart
 
 # Override settings from config
 claude-sandbox start-chrome --port 9333 --profile "Profile 1"
+```
+
+### Manage GPG keys
+
+```bash
+# Export the sandbox GPG key
+claude-sandbox gpg-export --file my-key-backup.asc
+
+# Import a previously exported key
+claude-sandbox gpg-import --file my-key-backup.asc
+
+# Generate a revocation certificate
+claude-sandbox gpg-revoke --file revoke.asc
+
+# Erase all GPG keys from the sandbox
+claude-sandbox gpg-erase
 ```
 
 ## How it works
