@@ -11,7 +11,7 @@
 #   console                 - Get console logs
 #   info                    - Get page info
 
-VENV_PATH="$HOME/.local/browser-venv"
+VENV_PATH="$HOME/.local/python-venv"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 
 source "$VENV_PATH/bin/activate"

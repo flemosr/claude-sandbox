@@ -61,14 +61,14 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | b
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Add Claude, Cargo, and Node to PATH (using symlinked current node)
-ENV PATH="/home/claude/.nvm/current/bin:/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
+# Activate Python venv globally so all packages are available via `python3`
+ENV PATH="/home/claude/.local/python-venv/bin:/home/claude/.nvm/current/bin:/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
+ENV VIRTUAL_ENV="/home/claude/.local/python-venv"
 
-# Install browser tools (Playwright for CDP connection to host Chrome)
-# Also install Python linters (pyright, ruff) for script development
-RUN python3 -m venv ~/.local/browser-venv && \
-    ~/.local/browser-venv/bin/pip install playwright pyright ruff && \
-    ln -sf ~/.local/browser-venv/bin/pyright ~/.local/bin/pyright && \
-    ln -sf ~/.local/browser-venv/bin/ruff ~/.local/bin/ruff
+# Install Python packages: browser tools (Playwright), linters (pyright, ruff),
+# and data science libraries (matplotlib, numpy)
+RUN python3 -m venv ~/.local/python-venv && \
+    ~/.local/python-venv/bin/pip install playwright pyright ruff matplotlib numpy
 
 # Copy browser tools
 COPY --chown=claude:claude browser-tools/ /home/claude/.local/browser-tools/

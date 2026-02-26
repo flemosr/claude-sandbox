@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 # Activate the virtual environment
-venv_path = Path.home() / ".local/browser-venv"
+venv_path = Path.home() / ".local/python-venv"
 if venv_path.exists():
     sys.path.insert(0, str(venv_path / "lib" / "python3.11" / "site-packages"))
 

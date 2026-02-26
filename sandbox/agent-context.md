@@ -179,7 +179,7 @@ The following tools are pre-installed:
 |----------|-------|
 | **Languages** | Node.js LTS (via nvm), Python 3.11, Rust (stable) |
 | **Node.js** | `nvm` (version manager), `npm`, `npx` - versions and global packages persist |
-| **Python** | `pyright` (type checker), `ruff` (linter), `playwright` |
+| **Python** | `pyright` (type checker), `ruff` (linter), `playwright`, `matplotlib`, `numpy` |
 | **Browser** | `browser` CLI for Chrome automation (use `browser test` to check availability) |
 | **Utilities** | `git`, `curl`, `wget`, `jq`, `yq`, `ripgrep`, `fd` |
 
