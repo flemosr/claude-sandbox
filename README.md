@@ -346,7 +346,7 @@ The sandbox comes with the following pre-installed:
 |----------|-------|
 | **Languages** | Node.js LTS (via nvm), Python 3.11, Rust (stable) |
 | **Node.js** | `nvm` (version manager), `npm`, `npx` |
-| **Python** | `pyright` (type checker), `ruff` (linter), `playwright` |
+| **Python** | `pyright` (type checker), `ruff` (linter), `playwright`, `matplotlib`, `numpy` |
 | **Browser** | `browser` CLI for Chrome automation |
 | **Utilities** | `git`, `curl`, `wget`, `jq`, `yq`, `ripgrep`, `fd` |
 
