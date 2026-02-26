@@ -383,3 +383,12 @@ claude-sandbox/
         ├── browser.sh          # CLI wrapper
         └── browser.py          # Python module
 ```
+
+## License
+
+This project is licensed under the [Apache License (Version 2.0)](LICENSE).
+
+## Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion by
+you, shall be licensed as Apache-2.0, without any additional terms or conditions.
