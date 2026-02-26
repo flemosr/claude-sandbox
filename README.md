@@ -21,7 +21,7 @@ docker compose build
 Add this to your `~/.zshrc`:
 
 ```bash
-alias claude-sandbox="/path/to/claude-sandbox/claude-sandbox.sh"
+alias claude-sandbox="/path/to/claude-sandbox/cli.sh"
 ```
 
 Replace `/path/to/claude-sandbox` with the actual path to this repository.
@@ -362,7 +362,7 @@ fetch docs and install packages.
 claude-sandbox/
 ├── README.md
 ├── docker-compose.yml
-├── claude-sandbox.sh           # Main CLI entrypoint
+├── cli.sh                      # Main CLI entrypoint
 ├── config.template.sh          # Configuration template
 ├── config.sh                   # Your config (create from template, gitignored)
 ├── scripts/
