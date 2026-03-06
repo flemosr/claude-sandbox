@@ -134,6 +134,17 @@ docker_args=(
   --add-host=host.docker.internal:host-gateway
 )
 
+# Pass host timezone so git commits use local time instead of UTC
+host_tz=""
+if [ -L /etc/localtime ]; then
+  host_tz=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')
+elif [ -f /etc/timezone ]; then
+  host_tz=$(cat /etc/timezone)
+fi
+if [ -n "$host_tz" ]; then
+  docker_args+=(-e "TZ=$host_tz")
+fi
+
 # Pass git identity env vars if configured
 if [ -n "$GIT_AUTHOR_NAME" ]; then
   docker_args+=(-e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME")
