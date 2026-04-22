@@ -1,5 +1,5 @@
 #!/bin/bash
-# Entrypoint script for Claude Code sandbox
+# Entrypoint script for Agent Sandbox
 
 # Always sync CLAUDE.md from image to persist volume (ensures freshness)
 mkdir -p /home/claude/persist/.claude
@@ -98,7 +98,7 @@ if [ "$GPG_SIGNING" = "true" ] && [ -n "$GIT_AUTHOR_NAME" ] && [ -n "$GIT_AUTHOR
     echo ""
     echo "The existing GPG key does not match your configured identity."
     echo "To back up your current key, run on the host:"
-    echo "  claude-sandbox gpg-export --file gpg-key-backup.asc"
+    echo "  agent-sandbox gpg-export --file gpg-key-backup.asc"
     echo ""
     echo "This creates the specified file in your current directory."
     echo "WARNING: This file contains your PRIVATE key. Do not commit or share it."

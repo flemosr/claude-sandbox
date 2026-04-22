@@ -1,4 +1,4 @@
-# Claude Code Sandbox Environment
+# Agent Sandbox Environment
 # Based on official devcontainer: https://github.com/anthropics/claude-code/tree/main/.devcontainer
 FROM debian:bookworm
 

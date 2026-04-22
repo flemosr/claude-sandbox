@@ -1,5 +1,5 @@
 #!/bin/bash
-# Firewall initialization script for Claude Code sandbox
+# Firewall initialization script for Agent Sandbox
 # Based on: https://github.com/anthropics/claude-code/blob/main/.devcontainer/init-firewall.sh
 
 set -e
