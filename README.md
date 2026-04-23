@@ -3,7 +3,7 @@
 An opinionated, containerized environment for running coding agents in YOLO mode, with Chrome
 integration, selective persistence, and isolated GPG-signed commits.
 
-Supports [Claude Code](https://claude.ai/code) and [opencode](https://opencode.ai/), selectable
+Supports [Claude Code](https://claude.ai/code) and [OpenCode](https://opencode.ai/), selectable
 per-launch. Geared towards Rust, Python, and TypeScript development. A global context file is
 injected so the agent is aware of the sandbox's capabilities and constraints.
 
@@ -198,12 +198,12 @@ required — there is no default, to avoid accidentally editing the wrong file:
 # Claude Code: edits ~/.claude/settings.json
 agent-sandbox settings claude
 
-# opencode: edits ~/.config/opencode/opencode.jsonc if present,
+# OpenCode: edits ~/.config/opencode/opencode.jsonc if present,
 # otherwise ~/.config/opencode/opencode.json
 agent-sandbox settings opencode
 ```
 
-If no opencode config file exists yet, `agent-sandbox settings opencode` creates a minimal
+If no OpenCode config file exists yet, `agent-sandbox settings opencode` creates a minimal
 `opencode.json` with the schema URL before opening it.
 
 These edits persist across container restarts.
@@ -214,7 +214,7 @@ These edits persist across container restarts.
 - Workspace-local sandbox files for the current project live under `.agent-sandbox/`
 - Claude session history for the project is stored in `.agent-sandbox/claude-sessions/`
 - `.agent-sandbox/tasks/` is created for task-management files and other local multi-agent scratch work
-- opencode session history and storage persist in the Docker volume under
+- OpenCode session history and storage persist in the Docker volume under
   `~/.local/share/opencode/`
 - Agent settings (claude and opencode) persist between sessions via a Docker volume
 - The container runs as non-root user `agent` for safety (agent-neutral, regardless of which agent
@@ -244,17 +244,17 @@ agent-sandbox → /home/agent/persist/
 ├── .claude.json              # Onboarding state, theme, user ID
 ├── .claude-versions/         # Claude Code binary versions
 │   └── versions/             # Downloaded Claude Code updates
-├── .config/opencode/         # opencode configuration (~/.config/opencode)
+├── .config/opencode/         # OpenCode configuration (~/.config/opencode)
 │   ├── opencode.json{,c}
 │   └── AGENTS.md             # Global agent context (opencode)
-├── .local/state/opencode/    # opencode local UI state (~/.local/state/opencode)
+├── .local/state/opencode/    # OpenCode local UI state (~/.local/state/opencode)
 │   └── model.json            # recent/favorite models and per-model variants
-├── .local/share/opencode/    # opencode data (~/.local/share/opencode)
+├── .local/share/opencode/    # OpenCode data (~/.local/share/opencode)
 │   ├── auth.json             # (plaintext provider credentials)
 │   ├── log/
 │   ├── opencode.db           # session/message history
-│   └── storage/              # additional opencode session artifacts
-├── .opencode/                # opencode install home (binary + bundled dependencies)
+│   └── storage/              # additional OpenCode session artifacts
+├── .opencode/                # OpenCode install home (binary + bundled dependencies)
 ├── .rustup/                  # Rust toolchains and components
 ├── .cargo/                   # Cargo registry cache, installed binaries, and config
 ├── .gnupg/                   # GPG keys for commit signing (when GPG_SIGNING is enabled)
@@ -277,12 +277,12 @@ The entrypoint creates symlinks so tools find their config in the expected locat
 - `~/.gnupg` → `~/persist/.gnupg`
 - `~/.nvm` → `~/persist/.nvm`
 
-This ensures authentication, settings, opencode's local model-picker state, installed claude
-and opencode versions, Rust toolchains, Node.js versions, and global npm packages persist across
+This ensures authentication, settings, OpenCode's local model-picker state, installed claude
+and OpenCode versions, Rust toolchains, Node.js versions, and global npm packages persist across
 container restarts and image rebuilds.
 
 > **Security note.** Both agents store credentials as plaintext inside the Docker volume
-> (`~/.claude/.credentials.json` for claude, `~/.local/share/opencode/auth.json` for opencode).
+> (`~/.claude/.credentials.json` for claude, `~/.local/share/opencode/auth.json` for OpenCode).
 > Anyone who can read the `agent-sandbox` volume can read those keys. Treat volume backups
 > (`agent-sandbox volume-backup`) as sensitive.
 
@@ -300,15 +300,15 @@ sessions and task-management files:
 If you already have `.agent-sessions/claude/` from an earlier sandbox version, the next Claude
 launch moves it to `.agent-sandbox/claude-sessions/` automatically.
 
-### opencode session data
+### OpenCode session data
 
-opencode persists its session state in the Docker volume:
+OpenCode persists its session state in the Docker volume:
 
 - `~/persist/.local/share/opencode/opencode.db` — session/message records
 - `~/persist/.local/share/opencode/storage/` — additional session artifacts such as
   `session_diff/` and migration metadata
 
-This means opencode sessions survive sandbox restarts and image rebuilds, but they are tied to the
+This means OpenCode sessions survive sandbox restarts and image rebuilds, but they are tied to the
 Docker volume rather than the workspace tree. To keep a workspace-local backup that survives
 `agent-sandbox volume-rm`, export them:
 
@@ -317,9 +317,9 @@ agent-sandbox opencode-sessions-export
 ```
 
 This writes one JSON file per session to `.agent-sandbox/opencode-sessions/<session-id>.json`,
-auto-scoped to the current workspace (opencode derives the project ID from the git root-commit
+auto-scoped to the current workspace (OpenCode derives the project ID from the git root-commit
 SHA, or uses `"global"` for non-git directories). Re-running the command overwrites existing
-files; session files for sessions later deleted in opencode are left in place as recovery
+files; session files for sessions later deleted in OpenCode are left in place as recovery
 artifacts.
 
 To restore after a `volume-rm` (or on a fresh machine), run:
