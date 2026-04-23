@@ -293,6 +293,8 @@ sessions and task-management files:
 
 - `.agent-sandbox/claude-sessions/` — bind-mounted to claude's per-project session dir
   (`~/persist/.claude/projects/-workspaces-<project>/`)
+- `.agent-sandbox/opencode-sessions/` — destination for `agent-sandbox opencode-sessions-export`
+  (one JSON file per session; see [opencode session data](#opencode-session-data))
 - `.agent-sandbox/tasks/` — task-management files and scratch notes for multi-agent workflows
 
 If you already have `.agent-sessions/claude/` from an earlier sandbox version, the next Claude
@@ -307,8 +309,18 @@ opencode persists its session state in the Docker volume:
   `session_diff/` and migration metadata
 
 This means opencode sessions survive sandbox restarts and image rebuilds, but they are tied to the
-Docker volume rather than the workspace tree. To move an opencode session between machines or
-workspaces, use opencode's native export/import commands.
+Docker volume rather than the workspace tree. To keep a workspace-local backup that survives
+`agent-sandbox volume-rm`, export them:
+
+```bash
+agent-sandbox opencode-sessions-export
+```
+
+This writes one JSON file per session to `.agent-sandbox/opencode-sessions/<session-id>.json`,
+auto-scoped to the current workspace (opencode derives the project ID from the git root-commit
+SHA, or uses `"global"` for non-git directories). Re-running the command overwrites existing
+files; session files for sessions later deleted in opencode are left in place as recovery
+artifacts. Use opencode's native `opencode import` to restore a session.
 
 > **Tip.** Add `.agent-sandbox/` to your `.gitignore` (global or per-repo). These files are local
 > state, not source — and like any agent history they may contain secrets the agent read during
