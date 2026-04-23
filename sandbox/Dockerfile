@@ -38,19 +38,19 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/yq
 
 # Create a non-root user for safety
-RUN useradd -m -s /bin/bash claude \
-    && mkdir -p /home/claude/.local/bin \
-    && chown -R claude:claude /home/claude
+RUN useradd -m -s /bin/bash agent \
+    && mkdir -p /home/agent/.local/bin \
+    && chown -R agent:agent /home/agent
 
-# Switch to claude user for tool installation
-USER claude
-WORKDIR /home/claude
+# Switch to agent user for tool installation
+USER agent
+WORKDIR /home/agent
 
 # Install Rust stable
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
 # Install nvm and Node.js LTS
-ENV NVM_DIR="/home/claude/.nvm"
+ENV NVM_DIR="/home/agent/.nvm"
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
     && . "$NVM_DIR/nvm.sh" \
     && nvm install --lts \
@@ -63,8 +63,8 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Add Claude, Cargo, and Node to PATH (using symlinked current node)
 # Activate Python venv globally so all packages are available via `python3`
-ENV PATH="/home/claude/.local/python-venv/bin:/home/claude/.nvm/current/bin:/home/claude/.cargo/bin:/home/claude/.local/bin:${PATH}"
-ENV VIRTUAL_ENV="/home/claude/.local/python-venv"
+ENV PATH="/home/agent/.local/python-venv/bin:/home/agent/.nvm/current/bin:/home/agent/.cargo/bin:/home/agent/.local/bin:${PATH}"
+ENV VIRTUAL_ENV="/home/agent/.local/python-venv"
 
 # Install Python packages: browser tools (Playwright), linters (pyright, ruff),
 # and data science libraries (matplotlib, numpy)
@@ -72,9 +72,9 @@ RUN python3 -m venv ~/.local/python-venv && \
     ~/.local/python-venv/bin/pip install playwright pyright ruff matplotlib numpy
 
 # Copy browser tools
-COPY --chown=claude:claude browser-tools/ /home/claude/.local/browser-tools/
-RUN chmod +x /home/claude/.local/browser-tools/browser.sh && \
-    ln -sf /home/claude/.local/browser-tools/browser.sh /home/claude/.local/bin/browser
+COPY --chown=agent:agent browser-tools/ /home/agent/.local/browser-tools/
+RUN chmod +x /home/agent/.local/browser-tools/browser.sh && \
+    ln -sf /home/agent/.local/browser-tools/browser.sh /home/agent/.local/bin/browser
 
 # Install opencode using the official installer.
 # Placed after the Python venv so frequent opencode releases don't invalidate
@@ -82,57 +82,57 @@ RUN chmod +x /home/claude/.local/browser-tools/browser.sh && \
 # The installer ignores XDG_BIN_DIR and always drops the binary at
 # ~/.opencode/bin/opencode, so we symlink it into ~/.local/bin (alongside claude).
 RUN curl -fsSL https://opencode.ai/install | bash \
-    && ln -sf /home/claude/.opencode/bin/opencode /home/claude/.local/bin/opencode
+    && ln -sf /home/agent/.opencode/bin/opencode /home/agent/.local/bin/opencode
 
 # Create persistent volume directory structure
 # All persistent data goes in persist which is mounted from a single Docker volume
-RUN mkdir -p /home/claude/persist/.claude
+RUN mkdir -p /home/agent/persist/.claude
 
 # Move installer-created files to volume location
-RUN mv /home/claude/.claude.json /home/claude/persist/.claude.json 2>/dev/null || true \
-    && mv /home/claude/.claude/* /home/claude/persist/.claude/ 2>/dev/null || true
+RUN mv /home/agent/.claude.json /home/agent/persist/.claude.json 2>/dev/null || true \
+    && mv /home/agent/.claude/* /home/agent/persist/.claude/ 2>/dev/null || true
 
 # Remove original directory and create symlinks to volume
-RUN rm -rf /home/claude/.claude \
-    && ln -sf /home/claude/persist/.claude /home/claude/.claude \
-    && ln -sf /home/claude/persist/.claude.json /home/claude/.claude.json
+RUN rm -rf /home/agent/.claude \
+    && ln -sf /home/agent/persist/.claude /home/agent/.claude \
+    && ln -sf /home/agent/persist/.claude.json /home/agent/.claude.json
 
 # Set up persistence for Claude Code binary versions (~/.local/share/claude)
 # This prevents re-downloading Claude Code updates on every container restart
-RUN mv /home/claude/.local/share/claude /home/claude/persist/.claude-versions 2>/dev/null || true \
-    && ln -sf /home/claude/persist/.claude-versions /home/claude/.local/share/claude
+RUN mv /home/agent/.local/share/claude /home/agent/persist/.claude-versions 2>/dev/null || true \
+    && ln -sf /home/agent/persist/.claude-versions /home/agent/.local/share/claude
 
 # Set up persistence for opencode data (~/.local/share/opencode), config
 # (~/.config/opencode), and local UI state (~/.local/state/opencode).
 # Mirrors the claude pattern: move any installer-created content into the persist tree,
 # then symlink the expected locations into it.
-RUN mkdir -p /home/claude/persist/.local/share /home/claude/persist/.local/state /home/claude/persist/.config \
-    && mv /home/claude/.local/share/opencode /home/claude/persist/.local/share/opencode 2>/dev/null || true \
-    && mv /home/claude/.config/opencode /home/claude/persist/.config/opencode 2>/dev/null || true \
-    && mv /home/claude/.local/state/opencode /home/claude/persist/.local/state/opencode 2>/dev/null || true \
-    && mkdir -p /home/claude/persist/.local/share/opencode /home/claude/persist/.local/state/opencode /home/claude/persist/.config/opencode \
-    && mkdir -p /home/claude/.local/share /home/claude/.local/state /home/claude/.config \
-    && rm -rf /home/claude/.local/share/opencode /home/claude/.local/state/opencode /home/claude/.config/opencode \
-    && ln -sf /home/claude/persist/.local/share/opencode /home/claude/.local/share/opencode \
-    && ln -sf /home/claude/persist/.local/state/opencode /home/claude/.local/state/opencode \
-    && ln -sf /home/claude/persist/.config/opencode /home/claude/.config/opencode
+RUN mkdir -p /home/agent/persist/.local/share /home/agent/persist/.local/state /home/agent/persist/.config \
+    && mv /home/agent/.local/share/opencode /home/agent/persist/.local/share/opencode 2>/dev/null || true \
+    && mv /home/agent/.config/opencode /home/agent/persist/.config/opencode 2>/dev/null || true \
+    && mv /home/agent/.local/state/opencode /home/agent/persist/.local/state/opencode 2>/dev/null || true \
+    && mkdir -p /home/agent/persist/.local/share/opencode /home/agent/persist/.local/state/opencode /home/agent/persist/.config/opencode \
+    && mkdir -p /home/agent/.local/share /home/agent/.local/state /home/agent/.config \
+    && rm -rf /home/agent/.local/share/opencode /home/agent/.local/state/opencode /home/agent/.config/opencode \
+    && ln -sf /home/agent/persist/.local/share/opencode /home/agent/.local/share/opencode \
+    && ln -sf /home/agent/persist/.local/state/opencode /home/agent/.local/state/opencode \
+    && ln -sf /home/agent/persist/.config/opencode /home/agent/.config/opencode
 
 # Backup nvm, Rust, Claude Code, and opencode install data to template locations for
 # volume initialization.
 # This allows the entrypoint to seed the persistent volume on first run
 USER root
-RUN cp -a /home/claude/.nvm /opt/nvm-template \
-    && cp -a /home/claude/.rustup /opt/rustup-template \
-    && cp -a /home/claude/.cargo /opt/cargo-template \
-    && cp -a /home/claude/persist/.claude-versions /opt/claude-versions-template \
-    && cp -a /home/claude/.opencode /opt/opencode-template
-USER claude
+RUN cp -a /home/agent/.nvm /opt/nvm-template \
+    && cp -a /home/agent/.rustup /opt/rustup-template \
+    && cp -a /home/agent/.cargo /opt/cargo-template \
+    && cp -a /home/agent/persist/.claude-versions /opt/claude-versions-template \
+    && cp -a /home/agent/.opencode /opt/opencode-template
+USER agent
 
 # Copy firewall and entrypoint scripts (after installs to preserve cache)
 USER root
 
 # Create workspaces directory with proper permissions
-RUN mkdir -p /workspaces && chown claude:claude /workspaces
+RUN mkdir -p /workspaces && chown agent:agent /workspaces
 
 COPY init-firewall.sh /opt/init-firewall.sh
 COPY entrypoint.sh /opt/entrypoint.sh
@@ -142,7 +142,7 @@ RUN chmod +x /opt/init-firewall.sh /opt/entrypoint.sh
 COPY agent-context.md /opt/agent-context.md
 
 # Run as root by default so entrypoint can set up firewall if needed
-# Entrypoint drops privileges to claude user for running claude
+# Entrypoint drops privileges to the agent user for running the agent CLI
 WORKDIR /workspaces
 
 ENTRYPOINT ["/opt/entrypoint.sh"]
