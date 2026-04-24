@@ -1,6 +1,8 @@
 .DS_Store
-.agent-sandbox/
-.codex
+
+.claude/
+.codex/
+.workcell/
 
 .ruff_cache/
 __pycache__/
