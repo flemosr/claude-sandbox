@@ -327,6 +327,24 @@ sessions and task-management files:
 - `.workcell/tasks/` — task-management files and scratch notes for multi-agent workflows
   (see [Multi-agent task files](#multi-agent-task-files))
 
+### Version control for `.workcell`
+
+It is recommended to keep `.workcell/` gitignored by the parent project repository while
+initializing a separate Git repository inside `.workcell/`. This keeps agent tasks, session
+exports, and other workspace-local state out of the shared project history, while still giving
+each user a proper VCS setup for their own agent work.
+
+From the project root:
+
+```bash
+echo ".workcell/" >> .gitignore
+git -C .workcell init
+git -C .workcell add .
+git -C .workcell commit -m "Initial workcell state"
+```
+
+After that, use `git -C .workcell status`, `git -C .workcell log`, and a private remote if desired.
+
 ### Multi-agent task files
 
 `.workcell/tasks/` is a shared scratchpad for coordinating work across multiple agent
