@@ -1,17 +1,27 @@
 # agent workcell
 
 An opinionated, containerized environment for running TUI coding agents in YOLO mode, with Chrome
-integration, selective persistence, and isolated GPG-signed commits.
+integration, Flutter host bridge, selective persistence, and isolated GPG-signed commits.
 
 Supports [Claude Code](https://claude.ai/code), [OpenCode](https://opencode.ai/), and
-[Codex](https://github.com/openai/codex), selectable per-launch. Geared towards Rust, Python, and
-TypeScript development. A global context file is injected so the agent is aware of the sandbox's
-capabilities and constraints.
+[Codex](https://github.com/openai/codex), selectable per-launch. Geared towards Rust, Python,
+TypeScript, and Flutter development. A global context file is injected so the agent is aware of
+the sandbox's capabilities and constraints.
 
 ## Prerequisites
 
 - Docker installed
 - macOS (or Linux/WSL2)
+
+### Optional: Chrome browser integration
+
+- [Google Chrome](https://www.google.com/chrome/) installed on the host
+- `socat` (`brew install socat`, see the [socat manpage](https://manpages.debian.org/socat))
+
+### Optional: Flutter native/device integration
+
+- [Flutter SDK](https://docs.flutter.dev/get-started/install) installed on the host (`flutter doctor`)
+- At least one Flutter target configured and available (`flutter devices`)
 
 ## Setup
 
@@ -150,8 +160,9 @@ workcell run codex "fix the tests"
 
 **Choosing an agent.** The first positional arg after `run` selects the agent: `claude` (default),
 `opencode`, or `codex`. All agents use the same sandbox image, the same persistent Docker volume,
-and the same `--yolo` / `--firewalled` / `--with-chrome` / `--port` flags. `--yolo` maps to each
-agent's native bypass:
+and the same `--yolo` / `--firewalled` / `--with-chrome` / `--with-flutter` / `--port` flags.
+`--with-chrome` and `--with-flutter` are mutually exclusive. `--yolo` maps to each agent's native
+bypass:
 
 - **claude** → `--dangerously-skip-permissions` CLI flag
 - **opencode** → `{"permission":"allow"}` injected via the `OPENCODE_CONFIG_CONTENT` env var
@@ -238,7 +249,8 @@ These edits persist across container restarts.
 - Full network access is available (for web searches, docs, git, etc.)
 - Filesystem access is isolated to the mounted directory
 - Host services are accessible via `host.docker.internal`
-- Dev server ports can be exposed with `--port <port>` (sets `$EXPOSED_PORTS` env var)
+- Dev server ports can be exposed with `--port <port>` (sets `$EXPOSED_PORTS` env var),
+  except in `--with-flutter` mode where `--port` selects the host bridge port
 - A global context file is injected as `~/.claude/CLAUDE.md` (claude),
   `~/.config/opencode/AGENTS.md` (opencode), and `~/.codex/AGENTS.md` (codex) to inform each
   agent about the sandbox environment
@@ -488,8 +500,8 @@ workcell --with-chrome --port 3000
 │   Browser ────► localhost:3000 ────► Docker -p 3000:3000            │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
+                                   │
+                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  CONTAINER                                                          │
 │                                                                     │
@@ -509,6 +521,199 @@ The `$EXPOSED_PORTS` env var contains the list of exposed ports (e.g., `3000,517
 2. Start dev server: `npm run dev -- --host 0.0.0.0` (must bind to 0.0.0.0)  
 3. Navigate Chrome: `browser goto "http://localhost:3000"` (Chrome is on host)
 
+## Flutter Bridge Integration (Native/Device Development)
+
+The workcell includes tools for Flutter development on native targets (iOS Simulator, Android
+Emulator, macOS desktop, and physical devices). Agents can edit Dart code inside the container and
+control Flutter apps running on the host.
+
+### Prerequisites
+
+- Flutter SDK installed on the host machine
+- At least one configured target: iOS Simulator, Android Emulator, macOS desktop, or physical device
+- macOS host (primary supported platform; Linux Android Emulator can follow)
+
+### Setup
+
+Add Flutter bridge settings to `config.sh`:
+
+```bash
+# Flutter host bridge integration
+FLUTTER_DEFAULT_BRIDGE_PORT=8765
+FLUTTER_BRIDGE_LOG_FILE="/tmp/flutter-bridge.log"
+FLUTTER_DEVICE_ID="macos"          # or "ios", "emulator-5554", etc.
+```
+
+Project-specific Flutter run settings can live in `.workcell/flutter-config.json`:
+
+```json
+{
+  "target": "lib/main_dev.dart",
+  "run_args": [
+    "--flavor",
+    "staging",
+    "--dart-define",
+    "API_BASE_URL=https://api.example.test"
+  ]
+}
+```
+
+The bridge updates the same file with runtime `token` and `port` values when it starts.
+When `--with-flutter` starts a bridge, its port is selected from `--port` if supplied,
+then `.workcell/flutter-config.json`, then `FLUTTER_DEFAULT_BRIDGE_PORT`.
+
+### Usage
+
+Simply use the `--with-flutter` flag:
+
+```bash
+workcell --with-flutter
+```
+
+This automatically:
+1. Starts a Flutter host bridge HTTP server on the selected port
+2. Generates a per-session bearer token for auth
+3. Sets `FLUTTER_BRIDGE_URL` and `FLUTTER_BRIDGE_TOKEN` env vars
+4. Mounts the bridge log file (for troubleshooting)
+5. Cleans up the bridge when the workcell exits
+
+Run `workcell --with-flutter` from the host Flutter project directory. Inside the sandbox,
+agents edit files through the mounted workspace path, while the bridge runs host-side
+`flutter` commands from that same project directory.
+
+The agent can use `flutterctl test` to check if the bridge is available.
+
+Use `--port` to select the bridge port for this run:
+
+```bash
+workcell --with-flutter --port 8765
+workcell run opencode --yolo --with-flutter --port 8766
+```
+
+`--with-flutter` and `--with-chrome` cannot be used together. Use `--with-chrome` for Flutter web
+and `--with-flutter` for native/device targets. In Flutter mode, `--port` is the host bridge port;
+it does not expose a container dev-server port.
+
+### Start Flutter Bridge Separately
+
+If you want to start the bridge independently (e.g., to keep it running across workcell sessions):
+
+```bash
+# Start Flutter bridge using defaults and project-local settings
+workcell start-flutter-bridge
+
+# Override settings
+workcell start-flutter-bridge --device ios --port 8766 --project ~/my-flutter-app
+```
+
+Then run the workcell without `--with-flutter`. The launcher writes connection details to
+`.workcell/flutter-config.json`, and `flutterctl` reads that file automatically.
+
+### Agent Workflow Inside Container
+
+```bash
+# Verify connection
+flutterctl test
+
+# Check bridge status
+flutterctl status
+
+# List available devices
+flutterctl devices
+
+# Launch app on a device
+flutterctl launch --device macos
+
+# Take screenshot before changes
+flutterctl screenshot -o before.png
+
+# ... edit Dart files in the container ...
+
+# Hot reload
+flutterctl hot-reload
+
+# Take screenshot after changes
+flutterctl screenshot -o after.png
+
+# View logs
+flutterctl logs
+```
+
+### How It Works
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  HOST (Mac)                                                          │
+│                                                                      │
+│   Flutter Bridge ◄─── HTTP API (port 8765)                           │
+│   0.0.0.0:8765       bearer token auth                               │
+│   │                                                                  │
+│   ├── flutter run / flutter attach  (subprocess management)          │
+│   ├── flutter screenshot             (on-demand)                     │
+│   └── flutter devices                (device discovery)              │
+│                                                                      │
+│   iOS Simulator / Android Emulator / macOS Desktop / Device          │
+└──────────────────────────────────────────────────────────────────────┘
+                                   ▲
+                                   │ host.docker.internal:8765
+                                   │ (Authorization: Bearer <token>)
+┌──────────────────────────────────────────────────────────────────────┐
+│  CONTAINER                                                           │
+│                                                                      │
+│   flutterctl ◄─── FLUTTER_BRIDGE_URL / TOKEN env vars                │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Limitations
+
+- **One bridge per sandbox/agent.** A `workcell run --with-flutter` session starts a dedicated
+  bridge for that sandbox. Multiple sandboxes should use distinct bridge ports and run from the
+  corresponding host Flutter project directories.
+- **macOS first.** The host bridge targets macOS as the primary platform. Linux Android Emulator
+  support can follow. Windows is out of scope for MVP.
+- **Native targets only.** Flutter web is handled separately via Chrome/CDP integration
+  (`--with-chrome`). The Flutter bridge targets iOS Simulator, Android Emulator, macOS desktop,
+  Linux desktop, and physical devices.
+- **Fixed project scope.** The bridge operates on a single project directory configured at startup.
+  It does not allow the agent to switch to arbitrary host directories.
+- **No arbitrary command execution.** The bridge API is fixed: launch, attach, detach, hot-reload,
+  hot-restart, screenshot, logs, status, and device discovery. There is no general-purpose exec
+  endpoint.
+- **Hot reload only.** The MVP supports hot reload (`r`) and hot restart (`R`) via the managed
+  Flutter subprocess. Tap/type/scroll UI automation is planned for a future release.
+- **Single configured port per bridge.** Automatic multi-instance port allocation is not yet
+  supported, so concurrent bridge instances need manually configured ports.
+
+### Troubleshooting
+
+Check the Flutter bridge log if you have connection issues:
+
+```bash
+# From host
+cat /tmp/flutter-bridge.log
+
+# From container
+cat "$FLUTTER_BRIDGE_LOG_FILE"
+```
+
+Common issues:
+
+1. **"Cannot reach Flutter bridge"** — the bridge is not running. Start it with
+   `workcell start-flutter-bridge` or add `--with-flutter` to `workcell run`.
+2. **"Missing FLUTTER_BRIDGE_TOKEN"** — token not available. When using `--with-flutter`,
+   the token is auto-generated. For a separately started bridge, run
+   `workcell start-flutter-bridge` from the workspace so `.workcell/flutter-config.json`
+   is available to the sandbox.
+3. **Concurrent sandbox needs a bridge** — start a separate bridge on a different port;
+   bridge instances are not shared between agents by default.
+4. **"Port 8765 is already in use"** — the port is occupied. Use a different `--port`,
+   update `.workcell/flutter-config.json`, or kill the existing process.
+5. **Flutter subprocess fails to start** — ensure your Flutter project compiles and the target
+   device/simulator is available. Run `flutter doctor -v` on the host to verify your setup.
+6. **"flutter: command not found"** — Flutter SDK is not on PATH. Set `FLUTTER_PATH` in `config.sh`
+   to the full path to the Flutter binary.
+
 ## Available Tools
 
 The workcell comes with the following pre-installed:
@@ -519,6 +724,7 @@ The workcell comes with the following pre-installed:
 | **Node.js** | `nvm` (version manager), `npm`, `npx` |
 | **Python** | `pyright` (type checker), `ruff` (linter), `playwright`, `matplotlib`, `numpy` |
 | **Browser** | `browser` CLI for Chrome automation |
+| **Flutter** | `flutterctl` CLI for Flutter bridge control |
 | **Database** | `psql` (PostgreSQL client) |
 | **Utilities** | `git`, `curl`, `wget`, `jq`, `yq`, `ripgrep`, `fd` |
 
@@ -547,15 +753,20 @@ agent-workcell/
 ├── config.sh                   # Your config (create from template, gitignored)
 ├── scripts/
 │   ├── run_sandbox.sh          # Docker container runner
-│   └── start-chrome-debug.sh   # Chrome debug launcher
+│   ├── start-chrome-debug.sh   # Chrome debug launcher
+│   ├── start-flutter-bridge.sh # Flutter bridge launcher
+│   └── flutter-bridge.py       # Flutter bridge HTTP server
 └── sandbox/
     ├── agent-context.md        # Global context for the sandboxed agent
     ├── Dockerfile
     ├── entrypoint.sh
     ├── init-firewall.sh
-    └── browser-tools/          # Browser control utilities
-        ├── browser.sh          # CLI wrapper
-        └── browser.py          # Python module
+    ├── browser-tools/          # Browser control utilities
+    │   ├── browser.sh          # CLI wrapper
+    │   └── browser.py          # Python module
+    └── flutter-tools/          # Flutter bridge control utilities
+        ├── flutterctl.sh       # CLI wrapper
+        └── flutterctl.py       # Python module
 ```
 
 ## License
