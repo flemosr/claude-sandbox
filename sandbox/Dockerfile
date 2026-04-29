@@ -170,8 +170,10 @@ COPY init-firewall.sh /opt/init-firewall.sh
 COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/init-firewall.sh /opt/entrypoint.sh
 
-# Copy global context file to non-volume location (source of truth for entrypoint)
+# Copy global context files to non-volume locations (source of truth for entrypoint)
 COPY agent-context.md /opt/agent-context.md
+COPY agent-context-web.md /opt/agent-context-web.md
+COPY agent-context-flutter.md /opt/agent-context-flutter.md
 
 # Run as root by default so entrypoint can set up firewall if needed
 # Entrypoint drops privileges to the agent user for running the agent CLI

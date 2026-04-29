@@ -4,10 +4,14 @@
 # Sync injected agent context files.
 mkdir -p /home/agent/persist/.claude
 cp /opt/agent-context.md /home/agent/persist/.claude/CLAUDE.md
+cp /opt/agent-context-web.md /home/agent/persist/.claude/agent-context-web.md
+cp /opt/agent-context-flutter.md /home/agent/persist/.claude/agent-context-flutter.md
 chown -R agent:agent /home/agent/persist/.claude 2>/dev/null || true
 
 mkdir -p /home/agent/persist/.config/opencode
 cp /opt/agent-context.md /home/agent/persist/.config/opencode/AGENTS.md
+cp /opt/agent-context-web.md /home/agent/persist/.config/opencode/agent-context-web.md
+cp /opt/agent-context-flutter.md /home/agent/persist/.config/opencode/agent-context-flutter.md
 chown -R agent:agent /home/agent/persist/.config/opencode 2>/dev/null || true
 
 # Seed nvm on first run.
@@ -149,7 +153,13 @@ ln -sfn /home/agent/persist/.config/opencode /home/agent/.config/opencode
 mkdir -p /home/agent/persist/.codex
 chown agent:agent /home/agent/persist/.codex 2>/dev/null || true
 cp /opt/agent-context.md /home/agent/persist/.codex/AGENTS.md
-chown agent:agent /home/agent/persist/.codex/AGENTS.md 2>/dev/null || true
+cp /opt/agent-context-web.md /home/agent/persist/.codex/agent-context-web.md
+cp /opt/agent-context-flutter.md /home/agent/persist/.codex/agent-context-flutter.md
+chown agent:agent \
+  /home/agent/persist/.codex/AGENTS.md \
+  /home/agent/persist/.codex/agent-context-web.md \
+  /home/agent/persist/.codex/agent-context-flutter.md \
+  2>/dev/null || true
 if [ -d /home/agent/.codex ] && [ ! -L /home/agent/.codex ]; then
   rm -rf /home/agent/.codex
 fi
