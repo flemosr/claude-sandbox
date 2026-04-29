@@ -736,6 +736,13 @@ def _flutter_node_offset_info(node):
     return 0, 0, False
 
 
+def _flutter_render_object_id(node):
+    render_object = node.get("renderObject")
+    if not isinstance(render_object, dict):
+        return None
+    return render_object.get("valueId")
+
+
 def _flutter_node_offset(node):
     x, y, _ = _flutter_node_offset_info(node)
     return x, y
@@ -745,6 +752,7 @@ def _unescape_flutter_quoted_string(value):
     replacements = {
         r"\\": "\\",
         r"\"": '"',
+        r"\'": "'",
         r"\n": "\n",
         r"\r": "\r",
         r"\t": "\t",
@@ -753,6 +761,60 @@ def _unescape_flutter_quoted_string(value):
     for escaped, replacement in replacements.items():
         result = result.replace(escaped, replacement)
     return result
+
+
+def _flutter_widget_type(node):
+    widget_type = node.get("widgetRuntimeType")
+    if widget_type:
+        return str(widget_type)
+    description = str(node.get("description") or "")
+    return re.split(r"[-(]", description, maxsplit=1)[0]
+
+
+def _normalize_flutter_key_value(value):
+    value = value.strip()
+    if (
+        len(value) >= 2
+        and value[0] == value[-1]
+        and value[0] in ("'", '"')
+    ):
+        value = value[1:-1]
+    return _unescape_flutter_quoted_string(value)
+
+
+def _flutter_key_from_string(value):
+    text = str(value or "")
+    patterns = (
+        r"-\[\s*<(?P<key>(?:\\.|[^>])*)>\s*\]",
+        r"\bkey:\s*\[\s*<(?P<key>(?:\\.|[^>])*)>\s*\]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            key = _normalize_flutter_key_value(match.group("key"))
+            if key:
+                return key
+    return None
+
+
+def _flutter_key_info_from_node(node):
+    key = _flutter_key_from_string(node.get("description"))
+    if not key:
+        for prop in node.get("properties") or []:
+            if not isinstance(prop, dict) or prop.get("name") != "key":
+                continue
+            key = _flutter_key_from_string(
+                prop.get("description") or prop.get("value") or ""
+            )
+            if key:
+                break
+    if not key:
+        return None
+    return {
+        "key": key,
+        "widget_type": _flutter_widget_type(node),
+        "source_field": "key",
+    }
 
 
 def _flutter_debug_widget_labels(debug_dump):
@@ -790,14 +852,30 @@ def _flutter_summary_texts(root):
         if value_id and text:
             texts[value_id] = {
                 "text": str(text),
-                "widget_type": node.get("widgetRuntimeType")
-                or node.get("description", ""),
+                "widget_type": _flutter_widget_type(node),
             }
         for child in node.get("children") or []:
             walk(child)
 
     walk(root)
     return texts
+
+
+def _flutter_summary_keys(root):
+    keys = {}
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        value_id = node.get("valueId")
+        key_info = _flutter_key_info_from_node(node)
+        if value_id and key_info:
+            keys[value_id] = key_info
+        for child in node.get("children") or []:
+            walk(child)
+
+    walk(root)
+    return keys
 
 
 def _flutter_summary_labels(root, debug_dump):
@@ -811,9 +889,7 @@ def _flutter_summary_labels(root, debug_dump):
         if not isinstance(node, dict):
             return
         value_id = node.get("valueId")
-        widget_type = (
-            node.get("widgetRuntimeType") or node.get("description", "")
-        )
+        widget_type = _flutter_widget_type(node)
         candidates = labels_by_type.get(widget_type)
         if value_id and candidates:
             labels[value_id] = candidates.pop(0)
@@ -859,19 +935,34 @@ def _flutter_inspector_elements_from_trees(
 ):
     summary_texts = _flutter_summary_texts(summary_root)
     summary_labels = _flutter_summary_labels(summary_root, debug_dump)
+    summary_keys = _flutter_summary_keys(summary_root)
     chrome_y = _flutter_content_y_offset(window, layout_root)
     elements = []
 
-    def walk(node, origin_x=0, origin_y=0):
+    def walk(node, origin_x=0, origin_y=0, applied_render_offsets=None):
         if not isinstance(node, dict):
             return
+        applied_render_offsets = applied_render_offsets or frozenset()
         offset_x, offset_y, explicit_offset = _flutter_node_offset_info(node)
+        render_object_id = _flutter_render_object_id(node)
+        if explicit_offset and render_object_id in applied_render_offsets:
+            offset_x = 0
+            offset_y = 0
+            explicit_offset = False
         x = origin_x + offset_x
         y = origin_y + offset_y
+        child_applied_render_offsets = applied_render_offsets
+        if explicit_offset and render_object_id:
+            child_applied_render_offsets = (
+                applied_render_offsets | {render_object_id}
+            )
 
         value_id = node.get("valueId")
         text_info = summary_texts.get(value_id) or summary_labels.get(value_id)
-        if text_info:
+        key_info = summary_keys.get(value_id) or _flutter_key_info_from_node(
+            node
+        )
+        if text_info or key_info:
             size = _flutter_node_size(node)
             rect = None
             if size:
@@ -884,6 +975,7 @@ def _flutter_inspector_elements_from_trees(
                 }
                 if (
                     not explicit_offset
+                    and text_info
                     and text_info.get("source_field") == "tooltip"
                     and text_info.get("widget_type") == "FloatingActionButton"
                 ):
@@ -895,26 +987,56 @@ def _flutter_inspector_elements_from_trees(
                     rect_source = "layout-offset"
             else:
                 rect_source = None
-            elements.append({
+            text = text_info["text"] if text_info else ""
+            widget_type = (
+                text_info.get("widget_type")
+                if text_info
+                else key_info.get("widget_type")
+            )
+            source_field = (
+                text_info.get("source_field")
+                if text_info
+                else key_info.get("source_field")
+            )
+            element = {
                 "type": "flutter_widget",
-                "text": text_info["text"],
+                "text": text,
                 "role": "",
                 "subrole": "",
-                "label": text_info["text"],
+                "label": text,
                 "description": node.get("description", ""),
                 "value": "",
                 "enabled": None,
                 "rect": rect,
                 "coordinate_space": "app-window-points",
                 "source": "flutter-inspector",
-                "widget_type": text_info["widget_type"],
+                "widget_type": widget_type,
                 "value_id": value_id,
-                "source_field": text_info.get("source_field"),
+                "source_field": source_field,
                 "rect_source": rect_source,
+            }
+            if key_info:
+                element["key"] = key_info["key"]
+                if text_info:
+                    element["source_field"] = "text,key"
+                elif not element["description"]:
+                    element["description"] = key_info["widget_type"]
+            elements.append({
+                **element,
             })
 
-        for child in node.get("children") or []:
-            walk(child, x, y)
+        children = node.get("children") or []
+        if _flutter_widget_type(node) == "ListView":
+            child_y = 0
+            for child in children:
+                walk(child, x, y + child_y, child_applied_render_offsets)
+                child_size = _flutter_node_size(child)
+                if child_size:
+                    child_y += child_size[1]
+            return
+
+        for child in children:
+            walk(child, x, y, child_applied_render_offsets)
 
     walk(layout_root)
     return elements
@@ -960,14 +1082,11 @@ def _macos_element_matches_text(element, text):
     return needle in haystack
 
 
-def _macos_inspect(app_name, parsed, vm_service_url=None):
-    if "key" in parsed:
-        return bridge_error(
-            "Key selectors are not supported by the macOS inspect backend",
-            "UNSUPPORTED_TARGET",
-            key=parsed["key"],
-        )
+def _macos_element_matches_key(element, key):
+    return element.get("key") == key
 
+
+def _macos_inspect(app_name, parsed, vm_service_url=None):
     window, window_error = _macos_get_app_window_info(app_name)
     if window_error:
         return bridge_error(
@@ -998,6 +1117,11 @@ def _macos_inspect(app_name, parsed, vm_service_url=None):
             element for element in elements
             if _macos_element_matches_text(element, parsed["text"])
         ]
+    if "key" in parsed:
+        elements = [
+            element for element in elements
+            if _macos_element_matches_key(element, parsed["key"])
+        ]
 
     result = {
         "elements": elements,
@@ -1009,8 +1133,8 @@ def _macos_inspect(app_name, parsed, vm_service_url=None):
     return result
 
 
-def _macos_tap_text(app_name, text, vm_service_url=None):
-    inspected = _macos_inspect(app_name, {"text": text}, vm_service_url)
+def _macos_tap_selector(app_name, selector, value, vm_service_url=None):
+    inspected = _macos_inspect(app_name, {selector: value}, vm_service_url)
     if "error" in inspected:
         return inspected
 
@@ -1023,7 +1147,7 @@ def _macos_tap_text(app_name, text, vm_service_url=None):
     ]
     if not candidates:
         return bridge_error(
-            "Element not found", "ELEMENT_NOT_FOUND", text=text
+            "Element not found", "ELEMENT_NOT_FOUND", **{selector: value}
         )
 
     candidates.sort(
@@ -1042,7 +1166,7 @@ def _macos_tap_text(app_name, text, vm_service_url=None):
         return tapped
     return {
         "action": "tap",
-        "text": text,
+        selector: value,
         "element_found": True,
         "x": tapped["x"],
         "y": tapped["y"],
@@ -1051,15 +1175,18 @@ def _macos_tap_text(app_name, text, vm_service_url=None):
     }
 
 
-def _macos_wait(app_name, parsed, vm_service_url=None):
-    if "key" in parsed:
-        return bridge_error(
-            "Key selectors are not supported by the macOS wait backend",
-            "UNSUPPORTED_TARGET",
-            key=parsed["key"],
-        )
+def _macos_tap_text(app_name, text, vm_service_url=None):
+    return _macos_tap_selector(app_name, "text", text, vm_service_url)
 
+
+def _macos_tap_key(app_name, key, vm_service_url=None):
+    return _macos_tap_selector(app_name, "key", key, vm_service_url)
+
+
+def _macos_wait(app_name, parsed, vm_service_url=None):
     timeout_ms = parsed["timeout_ms"]
+    selector = "key" if "key" in parsed else "text"
+    selector_value = parsed[selector]
     deadline = time.time() + timeout_ms / 1000
     while True:
         # Check before calling inspect so a slow inspect call that overshoots
@@ -1069,18 +1196,18 @@ def _macos_wait(app_name, parsed, vm_service_url=None):
             return bridge_error(
                 "Timed out waiting for element",
                 "TIMEOUT",
-                text=parsed["text"],
+                **{selector: selector_value},
                 timeout_ms=timeout_ms,
             )
         inspected = _macos_inspect(
-            app_name, {"text": parsed["text"]}, vm_service_url
+            app_name, {selector: selector_value}, vm_service_url
         )
         if "error" in inspected:
             return inspected
         if inspected["match_count"] > 0:
             return {
                 "action": "wait",
-                "text": parsed["text"],
+                selector: selector_value,
                 "element_found": True,
                 "match_count": inspected["match_count"],
             }
@@ -1089,7 +1216,7 @@ def _macos_wait(app_name, parsed, vm_service_url=None):
             return bridge_error(
                 "Timed out waiting for element",
                 "TIMEOUT",
-                text=parsed["text"],
+                **{selector: selector_value},
                 timeout_ms=timeout_ms,
             )
         time.sleep(min(0.25, remaining))
@@ -1251,6 +1378,9 @@ def _macos_desktop_dispatch(app_name, action, parsed, vm_service_url=None):
         return result, _ui_backend_status(result)
     if action == "tap" and "text" in parsed:
         result = _macos_tap_text(app_name, parsed["text"], vm_service_url)
+        return result, _ui_backend_status(result)
+    if action == "tap" and "key" in parsed:
+        result = _macos_tap_key(app_name, parsed["key"], vm_service_url)
         return result, _ui_backend_status(result)
     if action == "scroll":
         result = _macos_scroll(app_name, parsed)
@@ -1515,7 +1645,7 @@ def _macos_desktop_action_capabilities():
     return {
         "tap": {
             "supported": True,
-            "selectors": ["coordinates", "text"],
+            "selectors": ["coordinates", "text", "key"],
             "coordinate_space": "app-window-points",
         },
         "type": {"supported": True, "selectors": []},
@@ -1526,11 +1656,11 @@ def _macos_desktop_action_capabilities():
         },
         "inspect": {
             "supported": True,
-            "selectors": ["text"],
+            "selectors": ["text", "key"],
         },
         "wait": {
             "supported": True,
-            "selectors": ["text"],
+            "selectors": ["text", "key"],
         },
     }
 
@@ -1842,7 +1972,7 @@ def ui_action_unavailable_error(state, action, parsed, automation=None):
 
     selector_mode = _selector_mode(parsed)
     selectors = action_capability.get("selectors")
-    if selector_mode and selectors is not None and selector_mode not in selectors:
+    if selector_mode and selectors and selector_mode not in selectors:
         return bridge_error(
             f"Selector '{selector_mode}' is not supported for "
             f"{action} on backend '{automation['backend']}'",

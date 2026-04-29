@@ -110,7 +110,8 @@ class UiAutomationCapabilityTests(unittest.TestCase):
         self.assertEqual(status["permissions"], {"accessibility": "unknown"})
         self.assertTrue(status["actions"]["tap"]["supported"])
         self.assertEqual(
-            status["actions"]["tap"]["selectors"], ["coordinates", "text"]
+            status["actions"]["tap"]["selectors"],
+            ["coordinates", "text", "key"],
         )
         self.assertEqual(
             status["actions"]["tap"]["coordinate_space"],
@@ -120,9 +121,13 @@ class UiAutomationCapabilityTests(unittest.TestCase):
         self.assertTrue(status["actions"]["type"]["supported"])
         self.assertTrue(status["actions"]["scroll"]["supported"])
         self.assertTrue(status["actions"]["inspect"]["supported"])
-        self.assertEqual(status["actions"]["inspect"]["selectors"], ["text"])
+        self.assertEqual(
+            status["actions"]["inspect"]["selectors"], ["text", "key"]
+        )
         self.assertTrue(status["actions"]["wait"]["supported"])
-        self.assertEqual(status["actions"]["wait"]["selectors"], ["text"])
+        self.assertEqual(
+            status["actions"]["wait"]["selectors"], ["text", "key"]
+        )
 
 
 class MacosScreenshotHelperTests(unittest.TestCase):
@@ -316,6 +321,203 @@ class MacosBackendDispatchTests(unittest.TestCase):
             elements[0]["rect"], {"x": 34, "y": 92, "w": 200, "h": 24}
         )
 
+    def test_extracts_flutter_inspector_key_with_app_window_rect(self):
+        window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
+        summary_root = {
+            "valueId": "root",
+            "children": [{
+                "valueId": "button-1",
+                "description": "ElevatedButton-[<'add_item_button'>]",
+                "widgetRuntimeType": "ElevatedButton",
+            }],
+        }
+        layout_root = {
+            "valueId": "root",
+            "size": {"width": "800.0", "height": "600.0"},
+            "children": [{
+                "valueId": "button-1",
+                "description": "ElevatedButton-[<'add_item_button'>]",
+                "widgetRuntimeType": "ElevatedButton",
+                "size": {"width": "96.0", "height": "48.0"},
+                "parentData": {"offsetX": "680.0", "offsetY": "64.0"},
+            }],
+        }
+
+        elements = bridge._flutter_inspector_elements_from_trees(
+            summary_root, layout_root, window
+        )
+
+        self.assertEqual(elements[0]["key"], "add_item_button")
+        self.assertEqual(elements[0]["text"], "")
+        self.assertEqual(elements[0]["source_field"], "key")
+        self.assertEqual(
+            elements[0]["rect"], {"x": 680, "y": 96, "w": 96, "h": 48}
+        )
+
+    def test_extracts_key_from_flutter_diagnostics_property(self):
+        node = {
+            "valueId": "button-1",
+            "description": "ElevatedButton",
+            "widgetRuntimeType": "ElevatedButton",
+            "properties": [{
+                "name": "key",
+                "description": "key: [<'add_item_button'>]",
+            }],
+        }
+
+        key_info = bridge._flutter_key_info_from_node(node)
+
+        self.assertEqual(key_info["key"], "add_item_button")
+        self.assertEqual(key_info["widget_type"], "ElevatedButton")
+
+    def test_keyed_element_without_text_tolerates_missing_offset(self):
+        window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
+        summary_root = {
+            "valueId": "root",
+            "children": [{
+                "valueId": "list-1",
+                "description": "ListView-[<'todo_list'>]",
+                "widgetRuntimeType": "ListView",
+            }],
+        }
+        layout_root = {
+            "valueId": "root",
+            "size": {"width": "800.0", "height": "600.0"},
+            "children": [{
+                "valueId": "list-1",
+                "description": "ListView-[<'todo_list'>]",
+                "widgetRuntimeType": "ListView",
+                "size": {"width": "768.0", "height": "480.0"},
+            }],
+        }
+
+        elements = bridge._flutter_inspector_elements_from_trees(
+            summary_root, layout_root, window
+        )
+
+        self.assertEqual(elements[0]["key"], "todo_list")
+        self.assertEqual(elements[0]["rect_source"], "layout-offset")
+
+    def test_does_not_double_count_reused_render_object_offset(self):
+        window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
+        summary_root = {
+            "valueId": "root",
+            "children": [{
+                "valueId": "button-1",
+                "description": "IconButton-[<'delete_item_0'>]",
+                "widgetRuntimeType": "IconButton",
+            }],
+        }
+        shared_render_object = {
+            "valueId": "render-shared",
+            "properties": [{
+                "name": "parentData",
+                "description": "offset=Offset(0.0, 64.0) (can use size)",
+            }],
+        }
+        layout_root = {
+            "valueId": "root",
+            "size": {"width": "800.0", "height": "600.0"},
+            "children": [{
+                "valueId": "expanded",
+                "description": "Expanded",
+                "renderObject": shared_render_object,
+                "children": [{
+                    "valueId": "focus",
+                    "description": "Focus",
+                    "renderObject": shared_render_object,
+                    "children": [{
+                        "valueId": "button-1",
+                        "description": "IconButton-[<'delete_item_0'>]",
+                        "widgetRuntimeType": "IconButton",
+                        "size": {"width": "40.0", "height": "40.0"},
+                        "parentData": {"offsetX": "680.0", "offsetY": "4.0"},
+                    }],
+                }],
+            }],
+        }
+
+        elements = bridge._flutter_inspector_elements_from_trees(
+            summary_root, layout_root, window
+        )
+
+        self.assertEqual(elements[0]["key"], "delete_item_0")
+        self.assertEqual(
+            elements[0]["rect"], {"x": 680, "y": 100, "w": 40, "h": 40}
+        )
+
+    def test_stacks_listview_children_without_explicit_offsets(self):
+        window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
+        summary_root = {
+            "valueId": "root",
+            "children": [
+                {
+                    "valueId": "delete-0",
+                    "description": "IconButton-[<'delete_item_0'>]",
+                    "widgetRuntimeType": "IconButton",
+                },
+                {
+                    "valueId": "delete-1",
+                    "description": "IconButton-[<'delete_item_1'>]",
+                    "widgetRuntimeType": "IconButton",
+                },
+                {
+                    "valueId": "delete-2",
+                    "description": "IconButton-[<'delete_item_2'>]",
+                    "widgetRuntimeType": "IconButton",
+                },
+            ],
+        }
+
+        def row(value_id, key):
+            return {
+                "valueId": f"card-{key}",
+                "description": "Card",
+                "widgetRuntimeType": "Card",
+                "size": {"width": "768.0", "height": "56.0"},
+                "children": [{
+                    "valueId": f"semantics-{key}",
+                    "description": "Semantics",
+                    "widgetRuntimeType": "Semantics",
+                    "parentData": {"offsetX": "680.0", "offsetY": "4.0"},
+                    "children": [{
+                        "valueId": value_id,
+                        "description": f"IconButton-[<'delete_item_{key}'>]",
+                        "widgetRuntimeType": "IconButton",
+                        "size": {"width": "40.0", "height": "40.0"},
+                    }],
+                }],
+            }
+
+        layout_root = {
+            "valueId": "root",
+            "size": {"width": "800.0", "height": "600.0"},
+            "children": [{
+                "valueId": "list",
+                "description": "ListView-[<'todo_list'>]",
+                "widgetRuntimeType": "ListView",
+                "parentData": {"offsetX": "16.0", "offsetY": "140.0"},
+                "size": {"width": "768.0", "height": "448.0"},
+                "children": [
+                    row("delete-0", "0"),
+                    row("delete-1", "1"),
+                    row("delete-2", "2"),
+                ],
+            }],
+        }
+
+        elements = bridge._flutter_inspector_elements_from_trees(
+            summary_root, layout_root, window
+        )
+
+        rects_by_key = {
+            element["key"]: element["rect"]
+            for element in elements
+        }
+        self.assertEqual(rects_by_key["delete_item_0"]["y"], 176)
+        self.assertEqual(rects_by_key["delete_item_1"]["y"], 232)
+        self.assertEqual(rects_by_key["delete_item_2"]["y"], 288)
+
     def test_extracts_fab_tooltip_with_default_material_rect(self):
         window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
         summary_root = {
@@ -377,6 +579,56 @@ class MacosBackendDispatchTests(unittest.TestCase):
         self.assertEqual(result["match_count"], 1)
         self.assertEqual(result["elements"][0]["text"], "Ready")
 
+    def test_inspect_filters_by_key(self):
+        window = {"window_id": 4, "bounds": (100, 200, 300, 400)}
+        flutter_elements = [
+            {
+                "type": "flutter_widget",
+                "text": "",
+                "key": "add_item_button",
+                "label": "",
+                "description": "ElevatedButton-[<'add_item_button'>]",
+                "value": "",
+                "role": "",
+                "subrole": "",
+                "enabled": None,
+                "rect": {"x": 1, "y": 2, "w": 3, "h": 4},
+                "coordinate_space": "app-window-points",
+                "source": "flutter-inspector",
+            },
+            {
+                "type": "flutter_widget",
+                "text": "",
+                "key": "other_button",
+                "label": "",
+                "description": "ElevatedButton-[<'other_button'>]",
+                "value": "",
+                "role": "",
+                "subrole": "",
+                "enabled": None,
+                "rect": {"x": 5, "y": 6, "w": 7, "h": 8},
+                "coordinate_space": "app-window-points",
+                "source": "flutter-inspector",
+            },
+        ]
+        with mock.patch.object(
+            bridge, "_macos_get_app_window_info", return_value=(window, None)
+        ), mock.patch.object(
+            bridge, "_run_osascript_capture", return_value=("", None)
+        ), mock.patch.object(
+            bridge,
+            "_flutter_inspector_elements",
+            return_value=(flutter_elements, None),
+        ):
+            result = bridge._macos_inspect(
+                "demo_app",
+                {"key": "add_item_button"},
+                vm_service_url="http://127.0.0.1:123/abc=/",
+            )
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["elements"][0]["key"], "add_item_button")
+
     def test_inspect_merges_flutter_inspector_text_fallback(self):
         window = {"window_id": 4, "bounds": (100, 200, 300, 400)}
         flutter_element = {
@@ -437,6 +689,33 @@ class MacosBackendDispatchTests(unittest.TestCase):
         self.assertEqual(result["text"], "Increment")
         self.assertTrue(result["element_found"])
 
+    def test_tap_key_uses_matching_element_center(self):
+        element = {
+            "type": "flutter_widget",
+            "key": "add_item_button",
+            "enabled": True,
+            "rect": {"x": 10, "y": 20, "w": 80, "h": 40},
+        }
+        with mock.patch.object(
+            bridge,
+            "_macos_inspect",
+            return_value={"elements": [element], "match_count": 1},
+        ), mock.patch.object(
+            bridge,
+            "_macos_tap_coordinates",
+            return_value={
+                "action": "tap",
+                "x": 50,
+                "y": 40,
+                "coordinate_space": "app-window-points",
+            },
+        ) as tap_coordinates:
+            result = bridge._macos_tap_key("demo_app", "add_item_button")
+
+        tap_coordinates.assert_called_once_with("demo_app", 50.0, 40.0)
+        self.assertEqual(result["key"], "add_item_button")
+        self.assertTrue(result["element_found"])
+
     def test_wait_times_out_when_text_never_appears(self):
         with mock.patch.object(
             bridge,
@@ -448,6 +727,20 @@ class MacosBackendDispatchTests(unittest.TestCase):
             )
 
         self.assertEqual(result["code"], "TIMEOUT")
+
+    def test_wait_returns_when_key_appears(self):
+        with mock.patch.object(
+            bridge,
+            "_macos_inspect",
+            return_value={"elements": [{"key": "add_item_button"}],
+                          "match_count": 1},
+        ):
+            result = bridge._macos_wait(
+                "demo_app", {"key": "add_item_button", "timeout_ms": 100}
+            )
+
+        self.assertEqual(result["action"], "wait")
+        self.assertEqual(result["key"], "add_item_button")
 
 
 class UiAutomationValidationTests(unittest.TestCase):
@@ -633,12 +926,17 @@ class UiAutomationUnavailableTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(error["code"], "UI_NOT_READY")
 
-    def test_key_tap_rejected_when_backend_does_not_advertise_key_selector(self):
+    def test_selector_rejected_when_backend_does_not_advertise_it(self):
+        actions = bridge._backend_action_capabilities("macos-desktop")
+        actions["tap"] = {
+            **actions["tap"],
+            "selectors": ["coordinates", "text"],
+        }
         state = self.State({
             "ready": True,
             "backend": "macos-desktop",
             "missing": [],
-            "actions": bridge._backend_action_capabilities("macos-desktop"),
+            "actions": actions,
         })
 
         error, status = bridge.ui_action_unavailable_error(
