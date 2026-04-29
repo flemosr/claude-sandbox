@@ -124,6 +124,13 @@ UI automation is currently scoped to iOS Simulator and macOS desktop backends. A
 desktop, Windows desktop, physical iOS, and Flutter web are not supported by the Flutter bridge UI
 action API.
 
+## Screenshots
+
+The bridge supports screenshots for native/device targets when a Flutter app is running under the
+bridge. On macOS desktop, screenshots capture only the Flutter app window. If the app window cannot
+be found or macOS Screen Recording permission blocks capture, the request fails instead of falling
+back to a full-screen screenshot.
+
 ## How It Works
 
 ```text
@@ -131,7 +138,7 @@ HOST
 
 Flutter Bridge HTTP API, usually 0.0.0.0:8765 with bearer-token auth
   - flutter run / flutter attach subprocess management
-  - flutter screenshot
+  - screenshots (`flutter screenshot` for mobile targets; app-window capture for macOS desktop)
   - flutter devices
   - hot reload / hot restart
   - UI automation capability/status and action API

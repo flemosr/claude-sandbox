@@ -90,7 +90,7 @@ The bridge preserves those settings when it writes runtime connection details.
 
 ```bash
 flutterctl test                       # Test bridge connection
-flutterctl status                     # Bridge/app status and UI automation capability
+flutterctl status                     # Bridge/app status, screenshot support, and UI automation capability
 flutterctl devices                    # List available host Flutter devices
 flutterctl launch [-d <device>]       # Launch on a device
 flutterctl attach [-d <device>]       # Attach to an already-running app
@@ -161,6 +161,12 @@ flutterctl screenshot -o .workcell/artifacts/20260429-132405-after.png
 ```
 
 On macOS desktop, screenshots are app-window-only. If the bridge cannot identify the Flutter window or host privacy permissions block capture, the command fails instead of capturing the full screen.
+
+Screenshot support is reported by the top-level `status.screenshot` object, not by
+`status.ui_automation.actions`. `ui_automation` only describes interactive UI actions such as tap,
+type, press, scroll, inspect, and wait. On macOS desktop, `status.screenshot.supported=true` means
+the bridge uses host `screencapture` against the Flutter app window; it does not mean Flutter's own
+`flutter screenshot` command supports macOS desktop.
 
 Save temporary screenshots and other generated verification artifacts under `.workcell/artifacts/`. Prefer timestamped filenames so repeated runs do not overwrite useful evidence.
 

@@ -252,7 +252,8 @@ def main():
     subparsers.add_parser("logs", help="Get recent Flutter logs")
 
     screenshot_parser = subparsers.add_parser(
-        "screenshot", help="Take a screenshot"
+        "screenshot",
+        help="Take a screenshot; macOS desktop captures the app window only",
     )
     screenshot_parser.add_argument(
         "--output", "-o", required=True, help="Output file path"
