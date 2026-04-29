@@ -90,10 +90,17 @@ fi
 project_name="${PWD##*/}"
 workspace_root="$(pwd)"
 workspace_workcell_dir="${workspace_root}/${WORKCELL_DIR_NAME}"
+artifacts_dir="${workspace_workcell_dir}/artifacts"
 tasks_dir="${workspace_workcell_dir}/tasks"
+workcell_gitignore="${workspace_workcell_dir}/.gitignore"
 session_mount_args=()
 
-mkdir -p "$workspace_workcell_dir" "$tasks_dir"
+mkdir -p "$workspace_workcell_dir" "$artifacts_dir" "$tasks_dir"
+# Seed project-local ignores once for generated workcell artifacts and runtime config.
+# Do not overwrite the file because users may intentionally version task notes or sessions.
+if [ ! -e "$workcell_gitignore" ]; then
+  printf '.DS_Store\nflutter-config.json\nartifacts/\n' > "$workcell_gitignore"
+fi
 
 case "$agent_cli" in
   claude)
