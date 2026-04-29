@@ -196,11 +196,14 @@ flutterctl logs                    # Get recent Flutter logs
 flutterctl screenshot -o <path>    # Take screenshot (PNG; macOS captures app window only)
 flutterctl tap --x 150 --y 300     # UI automation tap, if status says supported
 flutterctl tap --text "Sign in"    # Selector tap, if status says supported
+flutterctl tap --key loginButton   # Widget-key selector tap, if supported
 flutterctl type "hello"            # Type into current focus, if supported
 flutterctl press enter             # Press a named key, if supported
 flutterctl scroll --dy 600         # Scroll by delta, if supported
 flutterctl inspect [--text <text>] # Inspect UI state, if supported
+flutterctl inspect --key loginButton # Inspect a widget-key selector, if supported
 flutterctl wait --text "Ready"     # Wait for UI state, if supported
+flutterctl wait --key loginButton  # Wait for a widget-key selector, if supported
 ```
 
 `flutterctl status` includes a `ui_automation` object with backend, target,
@@ -216,19 +219,36 @@ macOS `scroll` approximates scrolling with keyboard dispatch (`pagedown`,
 `pageup`, arrows, `home`, or `end`), so `dx`/`dy` values choose direction and
 dominant axis rather than a pixel-exact distance. The actual movement depends
 on current focus and how the Flutter widget handles those keys.
-macOS `inspect`, `wait --text`, and `tap --text` use the host Accessibility
-tree plus Flutter inspector text previews and selected tooltip labels when a
-VM service is available.
+macOS `inspect`, `wait --text`, `wait --key`, `tap --text`, and `tap --key`
+use the host Accessibility tree plus Flutter inspector text previews, widget
+keys, and selected tooltip labels when a VM service is available. Key selectors
+are exact matches against Flutter inspector `ValueKey` diagnostics and require
+the bridge to derive a rectangle for the keyed widget.
 Returned rectangles are normalized into the same `app-window-points`
-coordinate space when the backend can derive bounds. Flutter widget-key
-selectors are still unsupported.
+coordinate space when the backend can derive bounds.
+Prefer widget-key selectors for agent-driven Flutter UI interactions when the
+app can provide them. Stable, descriptive `ValueKey<String>` values on controls
+and important containers give agents a reliable target that is independent of
+visible copy, localization, and layout changes. For example, key primary
+buttons, text fields, list views, tabs, row actions, and other repeated controls
+with names such as `login_button`, `email_field`, `settings_tab`,
+`todo_list`, or `delete_item_0`. Agents should check `flutterctl status` for
+`key` selector support, use `flutterctl inspect --key <key>` to verify the
+resolved rectangle, and then prefer `tap --key` / `wait --key` over text or
+coordinate selectors.
+For efficiency, agents should use `flutterctl inspect` as the primary
+text-based interface for discovering current UI elements, widget keys, visible
+text, widget types, and resolved rectangles. Use screenshots as a fallback when
+inspection cannot resolve a target, when visual layout is ambiguous, or when
+visual validation is needed after an action.
 Text selectors are not arbitrary Flutter widget selectors: they work only for
 elements that `inspect` can resolve to a rectangle, such as visible `Text`
 previews, macOS Accessibility labels, and selected tooltip labels whose bounds
-can be derived. Custom controls, `ValueKey` values, tooltip-only widgets without
-derivable bounds, and widgets without visible text or accessible labels may
-require coordinate taps instead. Run `flutterctl inspect` first when targeting
-anything beyond obvious visible text.
+can be derived. Key selectors work only when the Flutter inspector exposes the
+key and layout data for the same widget. Custom controls, tooltip-only widgets
+without derivable bounds, and widgets without visible text, accessible labels,
+or exposed keys may require coordinate taps instead. Run `flutterctl inspect`
+first when targeting anything beyond obvious visible text.
 
 Current UI automation target scope is intentionally narrow: iOS Simulator and
 macOS desktop only. Android, Linux desktop, Windows desktop, physical iOS, and
