@@ -45,21 +45,13 @@ source ~/.zshrc
 
 ### 2. Build the image
 
-```bash
-workcell build
-```
-
-This runs `docker compose build` from the workcell repository root, so it works even when you
-invoke `workcell` from another directory. Rebuilding also refreshes the bundled agent TUIs in the
-image to their latest releases.
+Build the image before first use. Rebuilding also refreshes the bundled agent TUIs in the image to
+their latest releases. See [Build and authenticate](#build-and-authenticate) for the command.
 
 ### 3. Authenticate
 
-Run the workcell with a selected agent once to authenticate with the corresponding account:
-
-```bash
-workcell run claude
-```
+Run the workcell with a selected agent once to authenticate with the corresponding account. See
+[Build and authenticate](#build-and-authenticate) for examples.
 
 ### 4. Configure optional integrations
 
@@ -77,7 +69,22 @@ Then follow the focused setup guide you need:
 
 `config.sh` is gitignored so personal paths, ports, and identities are not committed.
 
-## Usage
+## Command Reference
+
+### Build and Authenticate
+
+```bash
+# Build the image
+workcell build
+
+# Authenticate with the default agent
+workcell run claude
+```
+
+`workcell build` runs `docker compose build` from the workcell repository root, so it works even
+when you invoke `workcell` from another directory.
+
+### Run Agents
 
 Navigate to any project directory and run:
 
@@ -97,20 +104,6 @@ workcell run codex --yolo
 
 # Firewalled mode (restricted network access)
 workcell run --firewalled
-
-# Chrome enabled for web development
-workcell run --with-chrome
-
-# Expose a container dev-server port to the host
-workcell run --port 3000
-workcell run --port 3000 --port 5173
-
-# Web dev setup: YOLO + Chrome + exposed port
-workcell run --yolo --with-chrome --port 3000
-
-# Flutter native/device bridge
-workcell run --with-flutter
-workcell run codex --with-flutter --port 8765
 
 # With a prompt
 workcell run --yolo -p "fix the tests"
@@ -136,35 +129,40 @@ container dev servers to the host. In Flutter mode, `--port` selects the host Fl
 Running `workcell` without a command defaults to `run` with claude:
 
 ```bash
-workcell --yolo --with-chrome --port 3000
+workcell --yolo
 ```
 
-### Host helpers
+See [Integrations](#integrations) for Chrome, Flutter, and port examples.
+
+### Integrations
 
 ```bash
-# Start Chrome independently
+# Chrome enabled for web development
+workcell run --with-chrome
+workcell run --yolo --with-chrome --port 3000
+
+# Expose container dev-server ports to the host
+workcell run --port 3000
+workcell run --port 3000 --port 5173
+
+# Start Chrome independently on the host
 workcell start-chrome
 workcell start-chrome --restart
 workcell start-chrome --port 9333 --profile "Profile 1"
 
-# Start the Flutter bridge independently
+# Flutter native/device bridge
+workcell run --with-flutter
+workcell run codex --with-flutter --port 8765
+
+# Start the Flutter bridge independently on the host
 workcell start-flutter-bridge
 workcell start-flutter-bridge --port 8766 --project ~/my-flutter-app
-
-# Manage the workcell GPG key
-workcell gpg-new
-workcell gpg-export --file my-key-backup.asc
-workcell gpg-import --file my-key-backup.asc
-workcell gpg-revoke --file revoke.asc
-workcell gpg-erase
 ```
 
-See [Chrome integration](docs/chrome-integration.md), [Flutter integration](docs/flutter-integration.md),
-and [GPG setup](docs/gpg-setup.md) for details.
+See [Chrome integration](docs/chrome-integration.md) and
+[Flutter integration](docs/flutter-integration.md) for setup details.
 
-### Edit workcell settings
-
-Open an agent's config file in `vi` inside the workcell Docker volume:
+### Settings
 
 ```bash
 workcell settings claude
@@ -172,8 +170,48 @@ workcell settings opencode
 workcell settings codex
 ```
 
-The agent argument is required to avoid accidentally editing the wrong file. These edits persist
-across container restarts.
+These commands open an agent's config file in `vi` inside the workcell Docker volume. The agent
+argument is required to avoid accidentally editing the wrong file.
+
+### GPG Keys
+
+```bash
+workcell gpg-new
+workcell gpg-export --file my-key-backup.asc
+workcell gpg-import --file my-key-backup.asc
+workcell gpg-revoke --file revoke.asc
+workcell gpg-erase
+```
+
+See [GPG setup](docs/gpg-setup.md) for key setup, backup, and rotation guidance.
+
+### OpenCode Sessions
+
+```bash
+workcell opencode-sessions-export
+workcell opencode-sessions-import
+```
+
+These commands export and import OpenCode sessions between the Docker volume and
+`.workcell/opencode-sessions/`.
+
+### Volume Management
+
+```bash
+# Open a shell in the volume
+workcell volume-shell
+
+# Backup the volume
+workcell volume-backup --file agent-workcell-bkp.tgz
+
+# Restore from backup
+workcell volume-restore --file agent-workcell-bkp.tgz
+
+# Remove the volume
+workcell volume-rm
+```
+
+Volume commands affect the persisted user data described below.
 
 ## How It Works
 
@@ -214,7 +252,7 @@ The entrypoint symlinks these locations from `~/persist` so each tool sees its e
 directory paths.
 
 > **Security note.** Agent credentials are stored as plaintext inside the Docker volume. Treat the
-> `agent-workcell` volume and backups from `workcell volume-backup` as sensitive.
+> `agent-workcell` volume and its backups as sensitive.
 
 ### Workspace-local data
 
@@ -233,28 +271,7 @@ control for local agent state, initialize a separate Git repository inside `.wor
 ### OpenCode session backup
 
 OpenCode stores its live session database in the Docker volume. Export sessions to workspace-local
-JSON files before removing the volume:
-
-```bash
-workcell opencode-sessions-export
-workcell opencode-sessions-import
-```
-
-### Volume management
-
-```bash
-# Open a shell in the volume
-workcell volume-shell
-
-# Backup the volume
-workcell volume-backup --file agent-workcell-bkp.tgz
-
-# Restore from backup
-workcell volume-restore --file agent-workcell-bkp.tgz
-
-# Remove the volume
-workcell volume-rm
-```
+JSON files before removing the volume. See [OpenCode sessions](#opencode-sessions).
 
 ## Available Tools
 
