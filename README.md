@@ -230,7 +230,7 @@ Volume commands affect the persisted user data described below.
 - Dev server ports can be exposed with `--port <port>` except in Flutter mode, where `--port`
   selects the host bridge port.
 - A global context file is injected as `~/.claude/CLAUDE.md`, `~/.config/opencode/AGENTS.md`, and
-  `~/.codex/AGENTS.md`.
+  `~/.codex/AGENTS.md`, with linked tool-specific context docs copied alongside it.
 
 ## Persistence
 
@@ -319,6 +319,8 @@ agent-workcell/
 │   └── flutter-bridge.py
 └── sandbox/
     ├── agent-context.md
+    ├── agent-context-web.md
+    ├── agent-context-flutter.md
     ├── Dockerfile
     ├── entrypoint.sh
     ├── init-firewall.sh
