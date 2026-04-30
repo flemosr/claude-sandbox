@@ -190,9 +190,11 @@ When multiple iOS Simulators are booted, launch or attach with an explicit devic
 uses that selected id for native screenshot probes and prefers the visible Simulator window whose
 title matches the selected Flutter device name.
 
-iOS semantics and inspector rectangles are reported in `flutter-logical-points`; selector taps map
-them to `simulator-window-points` at action time. Semantics identifiers are preferred because their
-rects reflect Flutter semantics geometry and have proven more reliable for bottom sheets and
+iOS semantics and inspector rectangles are reported in root `flutter-logical-points`; selector taps
+map them to `simulator-window-points` at action time. For `--key` selectors, the bridge composes
+ancestor semantics offsets so descendants in overlays, dialogs, and bottom sheets are reported in
+the same root coordinate space as top-level controls. Semantics identifiers are preferred because
+their rects reflect Flutter semantics geometry and have proven more reliable for bottom sheets and
 overlays than inspector layout rectangles. Typing requires the intended text field to already be
 focused. After tapping a text field, wait briefly before typing so the iOS keyboard and focused
 input are ready. The keystroke backend avoids the iOS paste permission prompt, but may be less

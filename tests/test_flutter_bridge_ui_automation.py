@@ -1222,6 +1222,57 @@ SemanticsNode#0
         self.assertEqual(element["value"], "Draft")
         self.assertEqual(element["source"], "flutter-semantics")
 
+    def test_extracts_semantics_identifier_in_overlay_with_root_rect(self):
+        dump = """
+SemanticsNode#0
+ │ Rect.fromLTRB(0.0, 0.0, 1206.0, 2622.0)
+ │
+ └─SemanticsNode#1
+   │ Rect.fromLTRB(0.0, 0.0, 402.0, 874.0) scaled by 3.0x
+   │
+   └─SemanticsNode#61
+     │ Rect.fromLTRB(0.0, 0.0, 402.0, 874.0)
+     │ flags: scopesRoute, namesRoute
+     │
+     └─SemanticsNode#62
+       │ Rect.fromLTRB(0.0, 487.0, 402.0, 874.0)
+       │ identifier: "new_task_sheet"
+       │ label: "New task"
+       │
+       ├─SemanticsNode#63
+       │ │ Rect.fromLTRB(22.0, 89.0, 380.0, 145.0)
+       │ │ flags: isTextField
+       │ │ identifier: "task_title_field"
+       │ │
+       │ └─SemanticsNode#64
+       │     Rect.fromLTRB(0.0, 0.0, 358.0, 56.0)
+       │
+       └─SemanticsNode#67
+         │ Rect.fromLTRB(22.0, 281.0, 380.0, 335.0)
+         │ flags: isButton
+         │ identifier: "add_task_button"
+         │
+         └─SemanticsNode#68
+             Rect.fromLTRB(0.0, 0.0, 358.0, 54.0)
+"""
+
+        snapshot = bridge._flutter_semantics_snapshot_from_dump(dump)
+        by_key = {element["key"]: element for element in snapshot["elements"]}
+
+        self.assertEqual(snapshot["root_size"], {"width": 402, "height": 874})
+        self.assertEqual(
+            by_key["new_task_sheet"]["rect"],
+            {"x": 0, "y": 487, "w": 402, "h": 387},
+        )
+        self.assertEqual(
+            by_key["task_title_field"]["rect"],
+            {"x": 22, "y": 576, "w": 358, "h": 56},
+        )
+        self.assertEqual(
+            by_key["add_task_button"]["rect"],
+            {"x": 22, "y": 768, "w": 358, "h": 54},
+        )
+
     def test_keyed_element_without_text_tolerates_missing_offset(self):
         window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
         summary_root = {

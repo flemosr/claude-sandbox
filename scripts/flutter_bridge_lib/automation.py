@@ -868,6 +868,7 @@ def _flutter_semantics_snapshot_from_dump(dump):
     nodes = []
     current = None
     root_size = None
+    node_stack = []
 
     def finish_current():
         if current:
@@ -877,6 +878,12 @@ def _flutter_semantics_snapshot_from_dump(dump):
         if "SemanticsNode#" in line:
             finish_current()
             match = re.search(r"SemanticsNode#(\d+)", line)
+            prefix_len = line.find("SemanticsNode#")
+            # Flutter's text dump encodes the semantics hierarchy in its
+            # diagnostic tree prefix; child rects are parent-local.
+            while node_stack and prefix_len <= node_stack[-1]["prefix_len"]:
+                node_stack.pop()
+            parent = node_stack[-1]["node"] if node_stack else None
             current = {
                 "node_id": int(match.group(1)) if match else None,
                 "rect": None,
@@ -885,7 +892,10 @@ def _flutter_semantics_snapshot_from_dump(dump):
                 "value": "",
                 "actions": "",
                 "flags": "",
+                "parent": parent,
+                "global_rect": None,
             }
+            node_stack.append({"prefix_len": prefix_len, "node": current})
             continue
         if current is None:
             continue
@@ -933,10 +943,31 @@ def _flutter_semantics_snapshot_from_dump(dump):
                 }
                 break
 
+    def global_rect_for(node):
+        if not isinstance(node, dict):
+            return None
+        rect = node.get("rect")
+        if not rect:
+            return None
+        if node.get("global_rect"):
+            return node["global_rect"]
+
+        global_rect = dict(rect)
+        parent_rect = global_rect_for(node.get("parent"))
+        if parent_rect:
+            global_rect["x"] = _display_number(
+                float(parent_rect["x"]) + float(rect["x"])
+            )
+            global_rect["y"] = _display_number(
+                float(parent_rect["y"]) + float(rect["y"])
+            )
+        node["global_rect"] = global_rect
+        return global_rect
+
     elements = []
     for node in nodes:
         identifier = node.get("identifier")
-        rect = node.get("rect")
+        rect = global_rect_for(node)
         if not identifier or not rect:
             continue
         label = node.get("label") or ""
