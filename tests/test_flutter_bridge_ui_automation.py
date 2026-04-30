@@ -1191,6 +1191,37 @@ class MacosBackendDispatchTests(unittest.TestCase):
         self.assertEqual(key_info["key"], "add_item_button")
         self.assertEqual(key_info["widget_type"], "ElevatedButton")
 
+    def test_extracts_semantics_identifier_with_global_rect(self):
+        dump = """
+SemanticsNode#0
+ │ Rect.fromLTRB(0.0, 0.0, 1206.0, 2622.0)
+ │
+ └─SemanticsNode#1
+   │ Rect.fromLTRB(0.0, 0.0, 402.0, 874.0) scaled by 3.0x
+   │
+   └─SemanticsNode#35
+       Rect.fromLTRB(22.0, 576.0, 380.0, 632.0)
+       actions: focus, tap
+       flags: isTextField, isFocused, hasEnabledState, isEnabled
+       identifier: "task_title_field"
+       label: "Title"
+       value: "Draft"
+"""
+
+        snapshot = bridge._flutter_semantics_snapshot_from_dump(dump)
+
+        self.assertEqual(snapshot["root_size"], {"width": 402, "height": 874})
+        self.assertEqual(len(snapshot["elements"]), 1)
+        element = snapshot["elements"][0]
+        self.assertEqual(element["key"], "task_title_field")
+        self.assertEqual(element["semantics_identifier"], "task_title_field")
+        self.assertEqual(
+            element["rect"], {"x": 22, "y": 576, "w": 358, "h": 56}
+        )
+        self.assertEqual(element["label"], "Title")
+        self.assertEqual(element["value"], "Draft")
+        self.assertEqual(element["source"], "flutter-semantics")
+
     def test_keyed_element_without_text_tolerates_missing_offset(self):
         window = {"window_id": 4, "bounds": (100, 200, 800, 632)}
         summary_root = {
@@ -1703,6 +1734,76 @@ class MacosBackendDispatchTests(unittest.TestCase):
 
         self.assertEqual(status, 500)
         self.assertEqual(result["code"], "BACKEND_ERROR")
+
+    def test_ios_tap_key_prefers_semantics_identifier_rect(self):
+        semantics_snapshot = {
+            "coordinate_space": "flutter-logical-points",
+            "root_size": {"width": 402, "height": 874},
+            "elements": [{
+                "key": "task_title_field",
+                "semantics_identifier": "task_title_field",
+                "type": "flutter_semantics",
+                "enabled": True,
+                "rect": {"x": 22, "y": 576, "w": 358, "h": 56},
+                "source": "flutter-semantics",
+            }],
+        }
+        window = {
+            "window_id": 42,
+            "pid": 123,
+            "owner_name": "Simulator",
+            "name": "iPhone 17",
+            "bounds": {"x": 100, "y": 200, "width": 456, "height": 972},
+        }
+        content_match = {
+            "score_mean_abs_rgb": 3.68,
+            "best_match": {
+                "simulator_window_rect_estimate": {
+                    "x": 28,
+                    "y": 64,
+                    "w": 401,
+                    "h": 872,
+                }
+            },
+        }
+
+        with mock.patch.object(
+            bridge_ios,
+            "_flutter_semantics_snapshot",
+            return_value=(semantics_snapshot, None),
+        ) as semantics, mock.patch.object(
+            bridge_ios, "_flutter_inspector_snapshot"
+        ) as inspector, mock.patch.object(
+            bridge.shutil, "which", return_value="/usr/bin/xcrun"
+        ), mock.patch.object(
+            bridge_ios, "_ios_first_simulator_window", return_value=(window, None)
+        ), mock.patch.object(
+            bridge_ios,
+            "_ios_host_window_content_match_probe",
+            return_value=content_match,
+        ), mock.patch.object(
+            bridge_ios, "_ios_tap_coordinates", return_value={"action": "tap"}
+        ) as tap:
+            result = bridge._ios_tap_selector(
+                "key",
+                "task_title_field",
+                vm_service_url="http://127.0.0.1:123/abc=/",
+                device_id="8F0F",
+                device_name="iPhone 17",
+            )
+
+        semantics.assert_called_once_with("http://127.0.0.1:123/abc=/")
+        inspector.assert_not_called()
+        tap.assert_called_once()
+        x, y = tap.call_args.args[:2]
+        self.assertAlmostEqual(x, 228.5, places=3)
+        self.assertAlmostEqual(y, 666.618, places=3)
+        self.assertEqual(result["action"], "tap")
+        self.assertEqual(result["key"], "task_title_field")
+        self.assertEqual(
+            result["method"], "flutter-semantics-identifier-rect-center"
+        )
+        self.assertEqual(result["element"]["source"], "flutter-semantics")
 
     def test_ios_tap_selector_uses_matched_content_rect(self):
         window = {

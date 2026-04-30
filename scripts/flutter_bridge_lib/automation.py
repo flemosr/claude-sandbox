@@ -793,6 +793,26 @@ def _flutter_debug_dump_app(vm_service_url, isolate_id):
     return str(data), None
 
 
+def _flutter_debug_dump_semantics_tree(vm_service_url, isolate_id):
+    params = {"isolateId": isolate_id}
+    response, error = _vm_service_get(
+        vm_service_url,
+        "ext.flutter.debugDumpSemanticsTreeInTraversalOrder",
+        params,
+        timeout=10,
+    )
+    if error:
+        return None, error
+    data = response.get("data") if isinstance(response, dict) else None
+    if data is None:
+        return None, bridge_error(
+            "Flutter debugDumpSemanticsTreeInTraversalOrder did not return "
+            "semantics data",
+            "BACKEND_ERROR",
+        )
+    return str(data), None
+
+
 def _number_from_string(value):
     try:
         return float(str(value))
@@ -809,6 +829,165 @@ def _flutter_node_size(node):
     if width is None or height is None:
         return None
     return width, height
+
+
+def _semantics_rect_from_line(line):
+    match = re.search(
+        r"Rect\.fromLTRB\("
+        r"(-?\d+(?:\.\d+)?), "
+        r"(-?\d+(?:\.\d+)?), "
+        r"(-?\d+(?:\.\d+)?), "
+        r"(-?\d+(?:\.\d+)?)\)",
+        line,
+    )
+    if not match:
+        return None
+    left = float(match.group(1))
+    top = float(match.group(2))
+    right = float(match.group(3))
+    bottom = float(match.group(4))
+    return {
+        "x": _display_number(left),
+        "y": _display_number(top),
+        "w": _display_number(right - left),
+        "h": _display_number(bottom - top),
+    }
+
+
+def _semantics_quoted_value(line, field):
+    match = re.search(rf"\b{re.escape(field)}:\s+\"((?:\\.|[^\"])*)\"", line)
+    if not match:
+        return None
+    return _unescape_flutter_quoted_string(match.group(1))
+
+
+def _flutter_semantics_snapshot_from_dump(dump):
+    if not dump:
+        return {"elements": [], "coordinate_space": "flutter-logical-points"}
+
+    nodes = []
+    current = None
+    root_size = None
+
+    def finish_current():
+        if current:
+            nodes.append(current)
+
+    for line in dump.splitlines():
+        if "SemanticsNode#" in line:
+            finish_current()
+            match = re.search(r"SemanticsNode#(\d+)", line)
+            current = {
+                "node_id": int(match.group(1)) if match else None,
+                "rect": None,
+                "identifier": "",
+                "label": "",
+                "value": "",
+                "actions": "",
+                "flags": "",
+            }
+            continue
+        if current is None:
+            continue
+
+        rect = _semantics_rect_from_line(line)
+        if rect and current.get("rect") is None:
+            current["rect"] = rect
+            if "scaled by" in line and root_size is None:
+                root_size = {
+                    "width": rect["w"],
+                    "height": rect["h"],
+                }
+            continue
+
+        identifier = _semantics_quoted_value(line, "identifier")
+        if identifier is not None:
+            current["identifier"] = identifier
+            continue
+        label = _semantics_quoted_value(line, "label")
+        if label is not None:
+            current["label"] = label
+            continue
+        value = _semantics_quoted_value(line, "value")
+        if value is not None:
+            current["value"] = value
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("actions:"):
+            current["actions"] = stripped.removeprefix("actions:").strip()
+        elif stripped.startswith("flags:"):
+            current["flags"] = stripped.removeprefix("flags:").strip()
+
+    finish_current()
+
+    if root_size is None:
+        for node in nodes:
+            rect = node.get("rect")
+            if not rect:
+                continue
+            if rect["w"] > 0 and rect["h"] > 0:
+                root_size = {
+                    "width": rect["w"],
+                    "height": rect["h"],
+                }
+                break
+
+    elements = []
+    for node in nodes:
+        identifier = node.get("identifier")
+        rect = node.get("rect")
+        if not identifier or not rect:
+            continue
+        label = node.get("label") or ""
+        flags = node.get("flags") or ""
+        element = {
+            "type": "flutter_semantics",
+            "text": label,
+            "role": "",
+            "subrole": "",
+            "label": label,
+            "description": f"SemanticsNode#{node.get('node_id')}",
+            "value": node.get("value") or "",
+            "enabled": False
+            if "hasEnabledState" in flags and "isEnabled" not in flags
+            else None,
+            "rect": rect,
+            "coordinate_space": "flutter-logical-points",
+            "source": "flutter-semantics",
+            "widget_type": "Semantics",
+            "source_field": "semantics_identifier",
+            "rect_source": "semantics-tree",
+            "key": identifier,
+            "semantics_identifier": identifier,
+            "semantics_node_id": node.get("node_id"),
+        }
+        actions = node.get("actions")
+        if actions:
+            element["semantics_actions"] = actions
+        if flags:
+            element["semantics_flags"] = flags
+        elements.append(element)
+
+    snapshot = {
+        "elements": elements,
+        "coordinate_space": "flutter-logical-points",
+    }
+    if root_size:
+        snapshot["root_size"] = root_size
+    return snapshot
+
+
+def _flutter_semantics_snapshot(vm_service_url):
+    isolate_id, error = _flutter_vm_isolate_id(vm_service_url)
+    if error:
+        return None, error
+    dump, error = _flutter_debug_dump_semantics_tree(vm_service_url, isolate_id)
+    if error:
+        return None, error
+    snapshot = _flutter_semantics_snapshot_from_dump(dump)
+    snapshot["isolate_id"] = isolate_id
+    return snapshot, None
 
 
 def _flutter_offset_from_render_properties(node):
@@ -1273,6 +1452,32 @@ def _macos_inspect(app_name, parsed, vm_service_url=None):
 
 
 def _ios_inspect(parsed, vm_service_url=None):
+    diagnostics = []
+    if "key" in parsed:
+        semantics_snapshot, semantics_error = _flutter_semantics_snapshot(
+            vm_service_url
+        )
+        if semantics_error:
+            diagnostics.append({
+                "source": "flutter-semantics",
+                "code": semantics_error.get("code"),
+                "error": semantics_error.get("error"),
+            })
+        else:
+            elements = _filter_elements_by_selector(
+                semantics_snapshot["elements"], parsed
+            )
+            if elements:
+                result = {
+                    "elements": elements,
+                    "match_count": len(elements),
+                    "coordinate_space": "flutter-logical-points",
+                    "method": "flutter-semantics",
+                }
+                if diagnostics:
+                    result["diagnostics"] = diagnostics
+                return result
+
     elements, error = _flutter_inspector_elements(
         vm_service_url, coordinate_space="flutter-logical-points"
     )
@@ -1280,11 +1485,15 @@ def _ios_inspect(parsed, vm_service_url=None):
         return error
 
     elements = _filter_elements_by_selector(elements, parsed)
-    return {
+    result = {
         "elements": elements,
         "match_count": len(elements),
         "coordinate_space": "flutter-logical-points",
+        "method": "flutter-inspector",
     }
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result
 
 
 def _macos_tap_selector(app_name, selector, value, vm_service_url=None):
@@ -1337,8 +1546,145 @@ def _macos_tap_key(app_name, key, vm_service_url=None):
     return _macos_tap_selector(app_name, "key", key, vm_service_url)
 
 
+def _ios_tap_logical_element(
+        element, root_size, *, method, selector, value, device_id=None,
+        device_name=None):
+    if not root_size:
+        return bridge_error(
+            "Flutter semantics root size is unavailable",
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+    center = _rect_center(element.get("rect"))
+    if not center:
+        return bridge_error(
+            "Element rectangle is unavailable",
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        return bridge_error(
+            "xcrun is not available on the host PATH",
+            "UNSUPPORTED_TARGET",
+            **{selector: value},
+        )
+
+    window, window_error = _ios_first_simulator_window(device_name=device_name)
+    if window_error:
+        return bridge_error(
+            f"Failed to get Simulator window: {window_error}",
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    content_match = _ios_host_window_content_match_probe_best_effort(
+        xcrun, device_id=device_id, window=window, root_size=root_size
+    )
+    matched_rect = _matched_content_rect(content_match)
+    if not matched_rect:
+        return bridge_error(
+            "Failed to map Flutter coordinates to Simulator window: " +
+            str(content_match.get("error") or "no content match"),
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    score = _content_match_score(content_match)
+    if (
+        not _content_match_plausible_for_root(content_match, root_size)
+        or (score is not None and score > 10)
+    ):
+        bounds = window.get("bounds") or {}
+        try:
+            scale_x = float(bounds["width"]) / root_size["width"]
+            scale_y = float(bounds["height"]) / root_size["height"]
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            scale_x = float(matched_rect["w"]) / root_size["width"]
+            scale_y = float(matched_rect["h"]) / root_size["height"]
+            x = float(matched_rect["x"]) + center["x"] * scale_x
+            y = float(matched_rect["y"]) + center["y"] * scale_y
+        else:
+            x = center["x"] * scale_x
+            y = center["y"] * scale_y
+            method = f"{method}-full-window-fallback"
+    else:
+        scale_x = float(matched_rect["w"]) / root_size["width"]
+        scale_y = float(matched_rect["h"]) / root_size["height"]
+        x = float(matched_rect["x"]) + center["x"] * scale_x
+        y = float(matched_rect["y"]) + center["y"] * scale_y
+
+    tapped = _ios_tap_coordinates(x, y, device_name=device_name)
+    if "error" in tapped:
+        return tapped
+
+    return {
+        "action": "tap",
+        selector: value,
+        "element_found": True,
+        "x": _display_number(x),
+        "y": _display_number(y),
+        "coordinate_space": "simulator-window-points",
+        "method": method,
+        "match_score_mean_abs_rgb": content_match.get("score_mean_abs_rgb"),
+        "content_rect": matched_rect,
+        "element": element,
+    }
+
+
+def _ios_tap_semantics_identifier(
+        identifier, vm_service_url=None, device_id=None, device_name=None):
+    semantics_snapshot, semantics_error = _flutter_semantics_snapshot(
+        vm_service_url
+    )
+    if semantics_error:
+        return None, semantics_error
+
+    candidates = _filter_elements_by_selector(
+        semantics_snapshot["elements"], {"key": identifier}
+    )
+    candidates = [
+        element for element in candidates
+        if element.get("rect")
+        and element["rect"].get("w", 0) > 0
+        and element["rect"].get("h", 0) > 0
+        and element.get("enabled") is not False
+    ]
+    if not candidates:
+        return None, None
+
+    candidates.sort(
+        key=lambda element: (
+            0 if "tap" in str(element.get("semantics_actions") or "") else 1,
+            element["rect"]["y"],
+            element["rect"]["x"],
+        )
+    )
+    return _ios_tap_logical_element(
+        candidates[0],
+        semantics_snapshot.get("root_size"),
+        method="flutter-semantics-identifier-rect-center",
+        selector="key",
+        value=identifier,
+        device_id=device_id,
+        device_name=device_name,
+    ), None
+
+
 def _ios_tap_selector(selector, value, vm_service_url=None, device_id=None,
                       device_name=None):
+    semantics_error = None
+    if selector == "key":
+        semantics_result, semantics_error = _ios_tap_semantics_identifier(
+            value,
+            vm_service_url=vm_service_url,
+            device_id=device_id,
+            device_name=device_name,
+        )
+        if semantics_result:
+            return semantics_result
+
     inspector_snapshot, inspector_error = _flutter_inspector_snapshot(
         vm_service_url, coordinate_space="flutter-logical-points"
     )
@@ -1551,6 +1897,11 @@ def _ios_tap_selector(selector, value, vm_service_url=None, device_id=None,
         "content_rect": matched_rect,
         "element": element,
     }
+    if semantics_error:
+        result["semantics_fallback_error"] = {
+            "error": semantics_error.get("error"),
+            "code": semantics_error.get("code"),
+        }
     if element_match:
         result["element_image_match"] = element_match
     elif element_match_error:
