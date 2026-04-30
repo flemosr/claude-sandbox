@@ -18,8 +18,11 @@ Endpoints:
     POST   /hot-reload   - Hot reload (auth required)
     POST   /hot-restart  - Hot restart (auth required)
     POST   /stop         - Shutdown bridge
+    POST   /restart      - Restart bridge process with same argv
     GET    /logs         - Recent log lines (auth required)
     GET    /screenshot   - Take screenshot, returns PNG (auth required)
+    GET    /ios-simulator-probe - Probe fixed host iOS Simulator input capabilities
+    GET    /ios-coordinate-map - Diagnose iOS Simulator coordinate mapping
     POST   /tap          - UI automation tap (auth required)
     POST   /type         - UI automation text input (auth required)
     POST   /press        - UI automation key press (auth required)
@@ -38,11 +41,13 @@ import re
 import shutil
 import shlex
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -208,6 +213,14 @@ class BridgeState:
                 status["screen"] = _macos_window_screen_metadata(window)
             elif error:
                 status["screen"] = {"error": error}
+        elif status["ready"] and target["backend"] == "ios-simulator":
+            device = target.get("device") or {}
+            status["screen"] = _ios_simulator_screen_metadata(
+                device_name=device.get("name")
+            )
+            _disable_ios_window_dependent_actions_when_unavailable(status)
+            _disable_ios_host_keyboard_actions_when_unavailable(status)
+            _disable_ios_content_match_actions_when_unavailable(status)
         return status
 
     def screenshot_status(self):
@@ -261,6 +274,8 @@ class _CGPoint(ctypes.Structure):
 _macos_libs_lock = threading.Lock()
 _macos_cg = None
 _macos_cf = None
+_ios_tap_snapshot_lock = threading.Lock()
+_ios_tap_snapshot_cache = {}
 
 
 def _load_macos_libs():
@@ -300,6 +315,10 @@ def _load_macos_libs():
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32
         ]
         cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringGetCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32
+        ]
+        cf.CFStringGetCString.restype = ctypes.c_bool
         cf.CFNumberGetValue.argtypes = [
             ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
         ]
@@ -408,6 +427,28 @@ def _macos_type(app_name, text):
     if error:
         return error
     return {"action": "type"}
+
+
+def _ios_type_text(text):
+    result = _macos_type("Simulator", text)
+    if "error" in result:
+        return result
+    return {
+        "action": "type",
+        "text_length": len(text),
+        "method": "host-keystroke-to-simulator",
+    }
+
+
+def _ios_press_key(key):
+    result = _macos_press("Simulator", key)
+    if "error" in result:
+        return result
+    return {
+        "action": "press",
+        "key": key,
+        "method": "host-keypress-to-simulator",
+    }
 
 
 def _macos_inspect_script(app_name):
@@ -942,7 +983,8 @@ def _flutter_default_fab_rect(size, layout_root, chrome_y):
 
 
 def _flutter_inspector_elements_from_trees(
-    summary_root, layout_root, window, debug_dump=None
+    summary_root, layout_root, window, debug_dump=None,
+    coordinate_space="app-window-points",
 ):
     summary_texts = _flutter_summary_texts(summary_root)
     summary_labels = _flutter_summary_labels(summary_root, debug_dump)
@@ -1019,7 +1061,7 @@ def _flutter_inspector_elements_from_trees(
                 "value": "",
                 "enabled": None,
                 "rect": rect,
-                "coordinate_space": "app-window-points",
+                "coordinate_space": coordinate_space,
                 "source": "flutter-inspector",
                 "widget_type": widget_type,
                 "value_id": value_id,
@@ -1053,7 +1095,11 @@ def _flutter_inspector_elements_from_trees(
     return elements
 
 
-def _flutter_inspector_elements(vm_service_url, window):
+def _flutter_inspector_snapshot(
+    vm_service_url, window=None, coordinate_space="app-window-points",
+):
+    if window is None:
+        window = {"window_id": None, "bounds": (0, 0, 0, 0)}
     isolate_id, error = _flutter_vm_isolate_id(vm_service_url)
     if error:
         return [], error
@@ -1077,12 +1123,34 @@ def _flutter_inspector_elements(vm_service_url, window):
             "Flutter inspector did not return a layout tree", "BACKEND_ERROR"
         )
     debug_dump, _ = _flutter_debug_dump_app(vm_service_url, isolate_id)
-    return _flutter_inspector_elements_from_trees(
-        summary_root, layout_root, window, debug_dump
-    ), None
+    elements = _flutter_inspector_elements_from_trees(
+        summary_root, layout_root, window, debug_dump, coordinate_space
+    )
+    root_size = _flutter_node_size(layout_root)
+    snapshot = {
+        "elements": elements,
+        "coordinate_space": coordinate_space,
+    }
+    if root_size:
+        snapshot["root_size"] = {
+            "width": _display_number(root_size[0]),
+            "height": _display_number(root_size[1]),
+        }
+    return snapshot, None
 
 
-def _macos_element_matches_text(element, text):
+def _flutter_inspector_elements(
+    vm_service_url, window=None, coordinate_space="app-window-points",
+):
+    snapshot, error = _flutter_inspector_snapshot(
+        vm_service_url, window, coordinate_space
+    )
+    if error:
+        return [], error
+    return snapshot["elements"], None
+
+
+def _element_matches_text(element, text):
     needle = text.lower()
     haystack = " ".join(
         str(element.get(field) or "")
@@ -1093,8 +1161,22 @@ def _macos_element_matches_text(element, text):
     return needle in haystack
 
 
-def _macos_element_matches_key(element, key):
+def _element_matches_key(element, key):
     return element.get("key") == key
+
+
+def _filter_elements_by_selector(elements, parsed):
+    if "text" in parsed:
+        return [
+            element for element in elements
+            if _element_matches_text(element, parsed["text"])
+        ]
+    if "key" in parsed:
+        return [
+            element for element in elements
+            if _element_matches_key(element, parsed["key"])
+        ]
+    return elements
 
 
 def _macos_inspect(app_name, parsed, vm_service_url=None):
@@ -1123,16 +1205,7 @@ def _macos_inspect(app_name, parsed, vm_service_url=None):
         else:
             elements.extend(flutter_elements)
 
-    if "text" in parsed:
-        elements = [
-            element for element in elements
-            if _macos_element_matches_text(element, parsed["text"])
-        ]
-    if "key" in parsed:
-        elements = [
-            element for element in elements
-            if _macos_element_matches_key(element, parsed["key"])
-        ]
+    elements = _filter_elements_by_selector(elements, parsed)
 
     result = {
         "elements": elements,
@@ -1142,6 +1215,21 @@ def _macos_inspect(app_name, parsed, vm_service_url=None):
     if diagnostics:
         result["diagnostics"] = diagnostics
     return result
+
+
+def _ios_inspect(parsed, vm_service_url=None):
+    elements, error = _flutter_inspector_elements(
+        vm_service_url, coordinate_space="flutter-logical-points"
+    )
+    if error:
+        return error
+
+    elements = _filter_elements_by_selector(elements, parsed)
+    return {
+        "elements": elements,
+        "match_count": len(elements),
+        "coordinate_space": "flutter-logical-points",
+    }
 
 
 def _macos_tap_selector(app_name, selector, value, vm_service_url=None):
@@ -1194,6 +1282,115 @@ def _macos_tap_key(app_name, key, vm_service_url=None):
     return _macos_tap_selector(app_name, "key", key, vm_service_url)
 
 
+def _ios_tap_selector(selector, value, vm_service_url=None, device_id=None,
+                      device_name=None):
+    inspector_snapshot, inspector_error = _flutter_inspector_snapshot(
+        vm_service_url, coordinate_space="flutter-logical-points"
+    )
+    snapshot_source = "live"
+    if inspector_error:
+        cache_key = (vm_service_url, device_id)
+        with _ios_tap_snapshot_lock:
+            cached = _ios_tap_snapshot_cache.get(cache_key)
+        if (
+            not cached
+            or time.time() - cached["timestamp"] > 60
+            or not cached.get("snapshot")
+        ):
+            return inspector_error
+        inspector_snapshot = cached["snapshot"]
+        snapshot_source = "cached-after-inspector-error"
+    else:
+        cache_key = (vm_service_url, device_id)
+        with _ios_tap_snapshot_lock:
+            _ios_tap_snapshot_cache[cache_key] = {
+                "timestamp": time.time(),
+                "snapshot": inspector_snapshot,
+            }
+
+    candidates = _filter_elements_by_selector(
+        inspector_snapshot["elements"], {selector: value}
+    )
+    candidates = [
+        element for element in candidates
+        if element.get("rect")
+        and element["rect"].get("w", 0) > 0
+        and element["rect"].get("h", 0) > 0
+        and element.get("enabled") is not False
+    ]
+    if not candidates:
+        return bridge_error(
+            "Element not found", "ELEMENT_NOT_FOUND", **{selector: value}
+        )
+
+    candidates.sort(
+        key=lambda element: (
+            0 if element.get("type") == "button" else 1,
+            element["rect"]["y"],
+            element["rect"]["x"],
+        )
+    )
+    element = candidates[0]
+    root_size = inspector_snapshot.get("root_size")
+    if not root_size:
+        return bridge_error(
+            "Flutter inspector root size is unavailable",
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        return bridge_error(
+            "xcrun is not available on the host PATH",
+            "UNSUPPORTED_TARGET",
+            **{selector: value},
+        )
+
+    window, window_error = _ios_first_simulator_window(device_name=device_name)
+    if window_error:
+        return bridge_error(
+            f"Failed to get Simulator window: {window_error}",
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    content_match = _ios_host_window_content_match_probe(
+        xcrun, device_id=device_id, window=window
+    )
+    matched_rect = _matched_content_rect(content_match)
+    if not matched_rect:
+        return bridge_error(
+            "Failed to map Flutter coordinates to Simulator window: " +
+            str(content_match.get("error") or "no content match"),
+            "BACKEND_ERROR",
+            **{selector: value},
+        )
+
+    center = _rect_center(element["rect"])
+    scale_x = float(matched_rect["w"]) / root_size["width"]
+    scale_y = float(matched_rect["h"]) / root_size["height"]
+    x = float(matched_rect["x"]) + center["x"] * scale_x
+    y = float(matched_rect["y"]) + center["y"] * scale_y
+    tapped = _ios_tap_coordinates(x, y, device_name=device_name)
+    if "error" in tapped:
+        return tapped
+
+    return {
+        "action": "tap",
+        selector: value,
+        "element_found": True,
+        "x": _display_number(x),
+        "y": _display_number(y),
+        "coordinate_space": "simulator-window-points",
+        "method": "flutter-inspector-sampled-image-match",
+        "inspector_snapshot": snapshot_source,
+        "match_score_mean_abs_rgb": content_match.get("score_mean_abs_rgb"),
+        "content_rect": matched_rect,
+        "element": element,
+    }
+
+
 def _macos_wait(app_name, parsed, vm_service_url=None):
     timeout_ms = parsed["timeout_ms"]
     selector = "key" if "key" in parsed else "text"
@@ -1233,6 +1430,407 @@ def _macos_wait(app_name, parsed, vm_service_url=None):
         time.sleep(min(0.25, remaining))
 
 
+def _ios_wait(parsed, vm_service_url=None):
+    timeout_ms = parsed["timeout_ms"]
+    selector = "key" if "key" in parsed else "text"
+    selector_value = parsed[selector]
+    deadline = time.time() + timeout_ms / 1000
+    while True:
+        if deadline - time.time() <= 0:
+            return bridge_error(
+                "Timed out waiting for element",
+                "TIMEOUT",
+                **{selector: selector_value},
+                timeout_ms=timeout_ms,
+            )
+        inspected = _ios_inspect({selector: selector_value}, vm_service_url)
+        if "error" in inspected:
+            return inspected
+        if inspected["match_count"] > 0:
+            return {
+                "action": "wait",
+                selector: selector_value,
+                "element_found": True,
+                "match_count": inspected["match_count"],
+            }
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return bridge_error(
+                "Timed out waiting for element",
+                "TIMEOUT",
+                **{selector: selector_value},
+                timeout_ms=timeout_ms,
+            )
+        time.sleep(min(0.25, remaining))
+
+
+def _normalize_device_title(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _ios_first_simulator_window(device_name=None):
+    windows = _ios_simulator_window_candidates()
+    if "error" in windows:
+        return None, windows["error"]
+    candidates = windows.get("candidates") or []
+    if not candidates:
+        return None, "no visible Simulator window found"
+
+    normalized_name = _normalize_device_title(device_name)
+    if normalized_name:
+        for candidate in candidates:
+            title = _normalize_device_title(candidate.get("name"))
+            if title and (title == normalized_name or normalized_name in title):
+                candidate = dict(candidate)
+                candidate["selection"] = "device-name-match"
+                return candidate, None
+        if len(candidates) > 1:
+            return (
+                None,
+                f"no visible Simulator window matched device '{device_name}'",
+            )
+
+    if len(candidates) == 1:
+        candidate = dict(candidates[0])
+        candidate["selection"] = (
+            "single-window-fallback" if normalized_name else "largest-window"
+        )
+        return candidate, None
+    return candidates[0], None
+
+
+def _ios_simulator_screen_metadata(device_name=None):
+    window, error = _ios_first_simulator_window(device_name=device_name)
+    if error:
+        return {"error": error}
+    return {"simulator_window": window}
+
+
+def _scale_report(from_unit, to_unit, scale_x, scale_y, model=None):
+    report = {
+        "from": from_unit,
+        "to": to_unit,
+        "scale_x": _display_number(scale_x),
+        "scale_y": _display_number(scale_y),
+    }
+    if model:
+        report["model"] = model
+    return report
+
+
+def _rect_center(rect):
+    if not isinstance(rect, dict):
+        return None
+    try:
+        return {
+            "x": _display_number(float(rect["x"]) + float(rect["w"]) / 2),
+            "y": _display_number(float(rect["y"]) + float(rect["h"]) / 2),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _ios_coordinate_map_element(
+    element, logical_to_window, logical_to_matched_window=None
+):
+    mapped = dict(element)
+    center = _rect_center(element.get("rect"))
+    if center:
+        mapped["center"] = center
+    if center and logical_to_window:
+        mapped["estimated_simulator_window_center"] = {
+            "x": _display_number(center["x"] * logical_to_window["scale_x"]),
+            "y": _display_number(center["y"] * logical_to_window["scale_y"]),
+        }
+    if center and logical_to_matched_window:
+        mapped["matched_simulator_window_center_estimate"] = {
+            "x": _display_number(
+                logical_to_matched_window["offset_x"] +
+                center["x"] * logical_to_matched_window["scale_x"]
+            ),
+            "y": _display_number(
+                logical_to_matched_window["offset_y"] +
+                center["y"] * logical_to_matched_window["scale_y"]
+            ),
+        }
+    return mapped
+
+
+def _ios_simulator_accessibility_snapshot(device_name=None):
+    window, window_error = _ios_first_simulator_window(
+        device_name=device_name
+    )
+    if window_error:
+        return {"error": window_error}
+    if not shutil.which("osascript"):
+        return {"error": "osascript is not available on the host PATH"}
+
+    stdout, error = _run_osascript_capture(_macos_inspect_script("Simulator"))
+    if error:
+        return {"error": error.get("error"), "code": error.get("code")}
+
+    raw_lines = [
+        line for line in stdout.splitlines()
+        if line.strip()
+    ]
+    bounds = window["bounds"]
+    normalized_window = {
+        "bounds": (
+            bounds["x"],
+            bounds["y"],
+            bounds["width"],
+            bounds["height"],
+        )
+    }
+    elements = _parse_macos_inspect_output(stdout, normalized_window)
+    framed_elements = []
+    unframed_sample = []
+    for element in elements:
+        rect = element.get("rect")
+        element = dict(element)
+        element["coordinate_space"] = "simulator-window-points"
+        if rect:
+            framed_elements.append(element)
+            continue
+        if len(unframed_sample) < 20:
+            unframed_sample.append(element)
+
+    return {
+        "window": window,
+        "raw_line_count": len(raw_lines),
+        "parsed_element_count": len(elements),
+        "element_count": len(framed_elements),
+        "elements": framed_elements[:120],
+        "unframed_sample": unframed_sample,
+        "truncated": len(framed_elements) > 120,
+    }
+
+
+def _run_screencapture_window_probe(window):
+    if not window:
+        return {"error": "Simulator window is unavailable"}
+    if not shutil.which("screencapture"):
+        return {"error": "screencapture is not available on the host PATH"}
+
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".png", prefix="simulator_window_screenshot_"
+    )
+    os.close(fd)
+    try:
+        result = _run_probe_command(
+            _macos_screencapture_command(window["window_id"], tmp_path),
+            timeout=12,
+        )
+        dimensions = _png_dimensions(tmp_path)
+        if dimensions:
+            result["image"] = dimensions
+            try:
+                result["image"]["size_bytes"] = os.path.getsize(tmp_path)
+            except OSError:
+                pass
+        result["window"] = window
+        return result
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def ios_coordinate_map(vm_service_url=None, device_id=None, device_name=None):
+    xcrun = shutil.which("xcrun")
+    result = {
+        "available": bool(xcrun),
+        "xcrun": xcrun,
+        "coordinate_spaces": {
+            "inspect": "flutter-logical-points",
+            "tap": "simulator-window-points",
+            "native_screenshot": "native-device-pixels",
+        },
+        "notes": [
+            "This diagnostic reports measurement data and linear estimates; "
+            "it does not enable selector taps.",
+            "The full-window Flutter-to-window estimate can be wrong when "
+            "the Simulator window includes host chrome, bezels, or letterboxing.",
+        ],
+    }
+    if not xcrun:
+        result["error"] = "xcrun is not available on the host PATH"
+        return result
+
+    if device_id:
+        result["device_id"] = device_id
+    if device_name:
+        result["device_name"] = device_name
+
+    screen = _ios_simulator_screen_metadata(device_name=device_name)
+    result["screen"] = screen
+    screenshot = _run_simctl_screenshot_probe(xcrun, device_id=device_id)
+    result["native_screenshot"] = screenshot
+    window = screen.get("simulator_window") if isinstance(screen, dict) else None
+    result["host_window_screenshot"] = _run_screencapture_window_probe(window)
+    content_match = _ios_host_window_content_match_probe(
+        xcrun, device_id=device_id, window=window
+    )
+    result["device_content_match"] = content_match
+    result["simulator_accessibility"] = (
+        _ios_simulator_accessibility_snapshot(device_name=device_name)
+    )
+
+    inspector_snapshot = None
+    if vm_service_url:
+        inspector_snapshot, inspector_error = _flutter_inspector_snapshot(
+            vm_service_url, coordinate_space="flutter-logical-points"
+        )
+        if inspector_error:
+            result["flutter_inspector"] = {
+                "error": inspector_error.get("error"),
+                "code": inspector_error.get("code"),
+            }
+        else:
+            result["flutter_inspector"] = {
+                "coordinate_space": inspector_snapshot["coordinate_space"],
+                "root_size": inspector_snapshot.get("root_size"),
+                "element_count": len(inspector_snapshot["elements"]),
+            }
+    else:
+        result["flutter_inspector"] = {
+            "error": "No Flutter VM service is attached",
+            "code": "UI_NOT_READY",
+        }
+
+    image = screenshot.get("image") if isinstance(screenshot, dict) else None
+    mapping = {}
+    logical_to_window = None
+    logical_to_matched_window = None
+    root_size = (
+        inspector_snapshot.get("root_size") if inspector_snapshot else None
+    )
+    if image and root_size:
+        root_w = root_size["width"]
+        root_h = root_size["height"]
+        mapping["flutter_logical_to_native_pixels"] = _scale_report(
+            "flutter-logical-points",
+            "native-device-pixels",
+            image["width"] / root_w,
+            image["height"] / root_h,
+        )
+
+    if image and window:
+        bounds = window["bounds"]
+        image_w = image["width"]
+        image_h = image["height"]
+        win_w = bounds["width"]
+        win_h = bounds["height"]
+        mapping["window_points_to_native_pixels"] = _scale_report(
+            "simulator-window-points",
+            "native-device-pixels",
+            image_w / win_w,
+            image_h / win_h,
+        )
+        mapping["native_pixels_to_window_points"] = _scale_report(
+            "native-device-pixels",
+            "simulator-window-points",
+            win_w / image_w,
+            win_h / image_h,
+        )
+
+        if root_size:
+            root_w = root_size["width"]
+            root_h = root_size["height"]
+            logical_to_window = {
+                "scale_x": win_w / root_w,
+                "scale_y": win_h / root_h,
+            }
+            mapping["flutter_logical_to_window_points_estimate"] = (
+                _scale_report(
+                    "flutter-logical-points",
+                    "simulator-window-points",
+                    logical_to_window["scale_x"],
+                    logical_to_window["scale_y"],
+                    model="full-window-linear-estimate",
+                )
+            )
+    matched_rect = _matched_content_rect(content_match)
+    if matched_rect and root_size:
+        root_w = root_size["width"]
+        root_h = root_size["height"]
+        logical_to_matched_window = {
+            "offset_x": float(matched_rect["x"]),
+            "offset_y": float(matched_rect["y"]),
+            "scale_x": float(matched_rect["w"]) / root_w,
+            "scale_y": float(matched_rect["h"]) / root_h,
+        }
+        mapping["flutter_logical_to_window_points_matched_estimate"] = {
+            **_scale_report(
+                "flutter-logical-points",
+                "simulator-window-points",
+                logical_to_matched_window["scale_x"],
+                logical_to_matched_window["scale_y"],
+                model="sampled-image-match",
+            ),
+            "offset_x": _display_number(
+                logical_to_matched_window["offset_x"]
+            ),
+            "offset_y": _display_number(
+                logical_to_matched_window["offset_y"]
+            ),
+        }
+    result["mapping"] = mapping
+
+    if inspector_snapshot:
+        result["elements"] = [
+            _ios_coordinate_map_element(
+                element, logical_to_window, logical_to_matched_window
+            )
+            for element in inspector_snapshot["elements"]
+            if element.get("rect")
+        ]
+    return result
+
+
+def _disable_ios_window_dependent_actions_when_unavailable(status):
+    screen = status.get("screen") or {}
+    error = screen.get("error")
+    if not error:
+        return status
+    status["actions"]["tap"] = {
+        "supported": False,
+        "selectors": [],
+        "reason": f"Simulator window unavailable: {error}",
+    }
+    return status
+
+
+def _disable_ios_host_keyboard_actions_when_unavailable(status):
+    tools = status.get("tools") or {}
+    if tools.get("osascript"):
+        return status
+    reason = "Host osascript is unavailable"
+    for action_name in ("type", "press", "scroll"):
+        status["actions"][action_name] = {
+            "supported": False,
+            "selectors": [],
+            "reason": reason,
+        }
+    return status
+
+
+def _disable_ios_content_match_actions_when_unavailable(status):
+    tools = status.get("tools") or {}
+    if tools.get("screencapture"):
+        return status
+    tap = dict(status["actions"].get("tap") or {})
+    selectors = [
+        selector for selector in tap.get("selectors", [])
+        if selector == "coordinates"
+    ]
+    tap["selectors"] = selectors
+    tap["selector_reason"] = "Host screencapture is unavailable"
+    status["actions"]["tap"] = tap
+    return status
+
+
 def _macos_window_screen_metadata(window):
     x, y, w, h = window["bounds"]
     return {
@@ -1243,6 +1841,46 @@ def _macos_window_screen_metadata(window):
             "width": w,
             "height": h,
         }
+    }
+
+
+def _ios_tap_coordinates(x, y, device_name=None):
+    window, window_error = _ios_first_simulator_window(
+        device_name=device_name
+    )
+    if window_error:
+        return bridge_error(
+            f"Failed to get Simulator window: {window_error}",
+            "BACKEND_ERROR",
+        )
+
+    bounds = window["bounds"]
+    win_x = bounds["x"]
+    win_y = bounds["y"]
+    win_w = bounds["width"]
+    win_h = bounds["height"]
+    if x >= win_w or y >= win_h:
+        return bridge_error(
+            "Tap coordinates are outside the Simulator window",
+            "INVALID_BODY",
+            x=x,
+            y=y,
+            window=window,
+        )
+
+    screen_x = win_x + x
+    screen_y = win_y + y
+    error = _macos_post_mouse_click(screen_x, screen_y)
+    if error:
+        return error
+    return {
+        "action": "tap",
+        "x": x,
+        "y": y,
+        "coordinate_space": "simulator-window-points",
+        "screen_x": screen_x,
+        "screen_y": screen_y,
+        "window": window,
     }
 
 
@@ -1317,36 +1955,23 @@ def _macos_tap_coordinates(app_name, x, y):
     }
 
 
+def _scroll_key_from_parsed(parsed):
+    move = parsed.get("move")
+    if move == "top":
+        return "home"
+    if move == "up":
+        return "pageup"
+    if move == "down":
+        return "pagedown"
+    return None
+
+
 def _macos_scroll(app_name, parsed):
-    key = None
-    dispatch_reason = None
-    if parsed.get("edge") == "top":
-        key = "home"
-        dispatch_reason = "edge"
-    elif parsed.get("edge") == "bottom":
-        key = "end"
-        dispatch_reason = "edge"
-    elif parsed.get("edge") == "left":
-        key = "left"
-        dispatch_reason = "edge"
-    elif parsed.get("edge") == "right":
-        key = "right"
-        dispatch_reason = "edge"
-    else:
-        dy = parsed.get("dy", 0)
-        dx = parsed.get("dx", 0)
-        if dx == 0 and dy == 0:
-            key = None
-        elif abs(dy) >= abs(dx):
-            key = "pagedown" if dy > 0 else "pageup"
-            dispatch_reason = "vertical-delta"
-        elif dx:
-            key = "right" if dx > 0 else "left"
-            dispatch_reason = "horizontal-delta"
+    key = _scroll_key_from_parsed(parsed)
 
     if not key:
         return bridge_error(
-            "Scroll delta must be non-zero", "INVALID_BODY", **parsed
+            "'move' must be one of top, up, down", "INVALID_BODY", **parsed
         )
 
     result = _macos_press(app_name, key)
@@ -1357,8 +1982,28 @@ def _macos_scroll(app_name, parsed):
         **parsed,
         "dispatch": "key",
         "key": key,
-        "dispatch_reason": dispatch_reason,
         "scroll_model": "key-approximation",
+    }
+
+
+def _ios_scroll(parsed):
+    key = _scroll_key_from_parsed(parsed)
+
+    if not key:
+        return bridge_error(
+            "'move' must be one of top, up, down", "INVALID_BODY", **parsed
+        )
+
+    result = _ios_press_key(key)
+    if "error" in result:
+        return result
+    return {
+        "action": "scroll",
+        **parsed,
+        "dispatch": "key",
+        "key": key,
+        "scroll_model": "key-approximation",
+        "method": "host-keypress-to-simulator",
     }
 
 
@@ -1405,6 +2050,57 @@ def _macos_desktop_dispatch(app_name, action, parsed, vm_service_url=None):
     return (
         bridge_error(
             f"Action '{action}' not implemented for macOS desktop backend",
+            "UNSUPPORTED_TARGET",
+            **parsed,
+        ),
+        501,
+    )
+
+
+def _ios_simulator_dispatch(
+    action, parsed, vm_service_url=None, device_name=None, device_id=None
+):
+    if action == "tap" and "x" in parsed:
+        result = _ios_tap_coordinates(
+            parsed["x"], parsed["y"], device_name=device_name
+        )
+        return result, _ui_backend_status(result)
+    if action == "tap" and "text" in parsed:
+        result = _ios_tap_selector(
+            "text",
+            parsed["text"],
+            vm_service_url=vm_service_url,
+            device_id=device_id,
+            device_name=device_name,
+        )
+        return result, _ui_backend_status(result)
+    if action == "tap" and "key" in parsed:
+        result = _ios_tap_selector(
+            "key",
+            parsed["key"],
+            vm_service_url=vm_service_url,
+            device_id=device_id,
+            device_name=device_name,
+        )
+        return result, _ui_backend_status(result)
+    if action == "type":
+        result = _ios_type_text(parsed["text"])
+        return result, _ui_backend_status(result)
+    if action == "press":
+        result = _ios_press_key(parsed["key"])
+        return result, _ui_backend_status(result)
+    if action == "scroll":
+        result = _ios_scroll(parsed)
+        return result, _ui_backend_status(result)
+    if action == "inspect":
+        result = _ios_inspect(parsed, vm_service_url)
+        return result, _ui_backend_status(result)
+    if action == "wait":
+        result = _ios_wait(parsed, vm_service_url)
+        return result, _ui_backend_status(result)
+    return (
+        bridge_error(
+            f"Action '{action}' not implemented for iOS Simulator backend",
             "UNSUPPORTED_TARGET",
             **parsed,
         ),
@@ -1487,6 +2183,16 @@ def _macos_coregraphics_windows():
             return None
         return value.value
 
+    def string_value(ref):
+        if not ref:
+            return None
+        buffer = ctypes.create_string_buffer(1024)
+        if not cf.CFStringGetCString(
+            ref, buffer, len(buffer), encoding_utf8
+        ):
+            return None
+        return buffer.value.decode("utf-8", errors="replace")
+
     def bool_value(ref):
         if not ref:
             return None
@@ -1517,6 +2223,10 @@ def _macos_coregraphics_windows():
                     dict_get(info, "kCGWindowNumber")
                 ),
                 "pid": number_value(dict_get(info, "kCGWindowOwnerPID")),
+                "owner_name": string_value(
+                    dict_get(info, "kCGWindowOwnerName")
+                ),
+                "name": string_value(dict_get(info, "kCGWindowName")),
                 "layer": number_value(dict_get(info, "kCGWindowLayer")),
                 "alpha": number_value(dict_get(info, "kCGWindowAlpha")),
                 "onscreen": bool_value(
@@ -1552,6 +2262,15 @@ def dispatch_ui_action(state, action, parsed, automation=None):
     if backend == "macos-desktop":
         return _macos_desktop_dispatch(
             state.app_name, action, parsed, state.vm_service_url
+        )
+    if backend == "ios-simulator":
+        device = (automation or {}).get("device") or {}
+        return _ios_simulator_dispatch(
+            action,
+            parsed,
+            state.vm_service_url,
+            device_name=device.get("name"),
+            device_id=state.device_id,
         )
     return (
         bridge_error(
@@ -1637,6 +2356,8 @@ def probe_backend_tools(backend):
     if backend == "ios-simulator":
         return {
             "xcrun": bool(shutil.which("xcrun")),
+            "osascript": bool(shutil.which("osascript")),
+            "screencapture": bool(shutil.which("screencapture")),
         }
     if backend == "macos-desktop":
         return {
@@ -1664,6 +2385,7 @@ def _macos_desktop_action_capabilities():
         "scroll": {
             "supported": True,
             "selectors": [],
+            "moves": ["top", "up", "down"],
         },
         "inspect": {
             "supported": True,
@@ -1730,6 +2452,45 @@ def _target_capabilities(target):
 def _backend_action_capabilities(backend):
     if backend == "macos-desktop":
         return _macos_desktop_capabilities()["ui_actions"]
+    if backend == "ios-simulator":
+        actions = unsupported_actions("No verified input backend")
+        actions["tap"] = {
+            "supported": True,
+            "selectors": ["coordinates", "text", "key"],
+            "coordinate_space": "simulator-window-points",
+            "method": "coregraphics-simulator-window",
+            "selector_method": "flutter-inspector-sampled-image-match",
+        }
+        actions["type"] = {
+            "supported": True,
+            "selectors": [],
+            "method": "host-keystroke-to-simulator",
+            "requires": ["focused text field"],
+        }
+        actions["press"] = {
+            "supported": True,
+            "selectors": [],
+            "method": "host-keypress-to-simulator",
+        }
+        actions["scroll"] = {
+            "supported": True,
+            "selectors": [],
+            "moves": ["top", "up", "down"],
+            "method": "host-keypress-to-simulator",
+            "scroll_model": "key-approximation",
+        }
+        actions["inspect"] = {
+            "supported": True,
+            "selectors": ["text", "key"],
+            "coordinate_space": "flutter-logical-points",
+            "method": "flutter-inspector",
+        }
+        actions["wait"] = {
+            "supported": True,
+            "selectors": ["text", "key"],
+            "method": "flutter-inspector",
+        }
+        return actions
     return unsupported_actions("No verified backend")
 
 
@@ -1738,7 +2499,625 @@ def backend_permissions(backend):
         return {
             "accessibility": "unknown",
         }
+    if backend == "ios-simulator":
+        return {
+            "accessibility": "unknown",
+        }
     return {}
+
+
+def _truncate_text(value, limit=6000):
+    text = value if isinstance(value, str) else str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
+
+
+def _run_probe_command(command, timeout=8):
+    started = time.time()
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout
+        )
+        return {
+            "command": command,
+            "returncode": result.returncode,
+            "ok": result.returncode == 0,
+            "stdout": _truncate_text(result.stdout),
+            "stderr": _truncate_text(result.stderr),
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "command": command,
+            "returncode": None,
+            "ok": False,
+            "stdout": _truncate_text(e.stdout or ""),
+            "stderr": _truncate_text(e.stderr or ""),
+            "error": "command timed out",
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except OSError as e:
+        return {
+            "command": command,
+            "returncode": None,
+            "ok": False,
+            "stdout": "",
+            "stderr": "",
+            "error": str(e),
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+
+
+def _probe_output(*results):
+    return "\n".join(
+        f"{result.get('stdout', '')}\n{result.get('stderr', '')}"
+        for result in results
+        if isinstance(result, dict)
+    ).lower()
+
+
+def _contains_word(text, word):
+    return re.search(rf"\b{re.escape(word)}\b", text) is not None
+
+
+def _simctl_input_conclusions(commands):
+    help_text = _probe_output(
+        *(
+            result
+            for name, result in commands.items()
+            if name.startswith("simctl")
+        )
+    )
+    has_io = _contains_word(help_text, "io")
+    has_ui = _contains_word(help_text, "ui")
+    mentions_tap = (
+        _contains_word(help_text, "tap")
+        or _contains_word(help_text, "gesture")
+        or _contains_word(help_text, "pointer")
+        or re.search(r"\btouch\b(?!\s*id\b)", help_text) is not None
+    )
+    mentions_keyboard = any(
+        _contains_word(help_text, word)
+        for word in ("keyboard", "typetext", "type_text", "textinput")
+    )
+
+    coordinate_tap_viable = bool(mentions_tap)
+    text_input_viable = bool(mentions_keyboard)
+
+    coordinate_reason = (
+        "simctl help mentions a touch/tap/gesture primitive; verify command "
+        "syntax and coordinate semantics before enabling bridge input"
+        if coordinate_tap_viable
+        else "simctl help did not expose a coordinate tap/touch primitive"
+    )
+    text_reason = (
+        "simctl help mentions keyboard/text input; verify command syntax "
+        "before enabling bridge typing"
+        if text_input_viable
+        else "simctl help did not expose a direct text-entry primitive"
+    )
+
+    return {
+        "features": {
+            "simctl_io_subcommand": has_io,
+            "simctl_ui_subcommand": has_ui,
+            "mentions_touch_or_tap": mentions_tap,
+            "mentions_keyboard_or_text": mentions_keyboard,
+        },
+        "input_backend": {
+            "coordinate_tap": {
+                "viable": coordinate_tap_viable,
+                "reason": coordinate_reason,
+            },
+            "text_entry": {
+                "viable": text_input_viable,
+                "reason": text_reason,
+            },
+        },
+    }
+
+
+def _png_dimensions(path):
+    try:
+        with open(path, "rb") as f:
+            header = f.read(24)
+    except OSError:
+        return None
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return {
+        "width": int.from_bytes(header[16:20], "big"),
+        "height": int.from_bytes(header[20:24], "big"),
+    }
+
+
+def _png_paeth_predictor(left, up, up_left):
+    p = left + up - up_left
+    pa = abs(p - left)
+    pb = abs(p - up)
+    pc = abs(p - up_left)
+    if pa <= pb and pa <= pc:
+        return left
+    if pb <= pc:
+        return up
+    return up_left
+
+
+def _png_decode_rgb(path, max_pixels=5_000_000):
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        return None, f"failed to read PNG: {e}"
+
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None, "not a PNG file"
+
+    offset = 8
+    width = height = bit_depth = color_type = None
+    idat = bytearray()
+    while offset + 8 <= len(data):
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        chunk_type = data[offset + 4:offset + 8]
+        chunk_data = data[offset + 8:offset + 8 + length]
+        offset += 12 + length
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, color_type, compression, filter_method, \
+                interlace = struct.unpack(">IIBBBBB", chunk_data)
+            if compression != 0 or filter_method != 0 or interlace != 0:
+                return None, "unsupported PNG compression/filter/interlace"
+        elif chunk_type == b"IDAT":
+            idat.extend(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+
+    if not width or not height:
+        return None, "PNG is missing IHDR"
+    if width * height > max_pixels:
+        return None, "PNG is too large to decode for matching"
+    if bit_depth != 8 or color_type not in (0, 2, 4, 6):
+        return None, "unsupported PNG color format"
+
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}[color_type]
+    stride = width * channels
+    try:
+        raw = zlib.decompress(bytes(idat))
+    except zlib.error as e:
+        return None, f"failed to decompress PNG: {e}"
+
+    expected = (stride + 1) * height
+    if len(raw) < expected:
+        return None, "PNG image data is truncated"
+
+    previous = bytearray(stride)
+    rows = []
+    pos = 0
+    for _ in range(height):
+        filter_type = raw[pos]
+        pos += 1
+        scanline = bytearray(raw[pos:pos + stride])
+        pos += stride
+        recon = bytearray(stride)
+        for i, value in enumerate(scanline):
+            left = recon[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if filter_type == 0:
+                recon[i] = value
+            elif filter_type == 1:
+                recon[i] = (value + left) & 0xFF
+            elif filter_type == 2:
+                recon[i] = (value + up) & 0xFF
+            elif filter_type == 3:
+                recon[i] = (value + ((left + up) // 2)) & 0xFF
+            elif filter_type == 4:
+                recon[i] = (
+                    value + _png_paeth_predictor(left, up, up_left)
+                ) & 0xFF
+            else:
+                return None, f"unsupported PNG filter type {filter_type}"
+        rows.append(recon)
+        previous = recon
+
+    rgb = bytearray(width * height * 3)
+    out = 0
+    for row in rows:
+        for x in range(width):
+            i = x * channels
+            if color_type == 0:
+                r = g = b = row[i]
+            elif color_type == 2:
+                r, g, b = row[i], row[i + 1], row[i + 2]
+            elif color_type == 4:
+                r = g = b = row[i]
+            else:
+                r, g, b = row[i], row[i + 1], row[i + 2]
+            rgb[out:out + 3] = bytes((r, g, b))
+            out += 3
+
+    return {"width": width, "height": height, "pixels": bytes(rgb)}, None
+
+
+def _rgb_at(image, x, y):
+    x = min(max(int(x), 0), image["width"] - 1)
+    y = min(max(int(y), 0), image["height"] - 1)
+    i = (y * image["width"] + x) * 3
+    pixels = image["pixels"]
+    return pixels[i], pixels[i + 1], pixels[i + 2]
+
+
+def _sampled_crop_score(native, host, crop, columns=12, rows=24):
+    diff = 0
+    samples = 0
+    for row in range(rows):
+        v = (row + 0.5) / rows
+        native_y = int(v * native["height"])
+        host_y = crop["y"] + int(v * crop["height"])
+        for column in range(columns):
+            u = (column + 0.5) / columns
+            native_x = int(u * native["width"])
+            host_x = crop["x"] + int(u * crop["width"])
+            nr, ng, nb = _rgb_at(native, native_x, native_y)
+            hr, hg, hb = _rgb_at(host, host_x, host_y)
+            diff += abs(nr - hr) + abs(ng - hg) + abs(nb - hb)
+            samples += 3
+    return diff / samples if samples else math.inf
+
+
+def _ios_content_match_search(native, host, region, samples=(10, 18),
+                              step=8, height_step=12,
+                              focus=None):
+    aspect = native["width"] / native["height"]
+    region_x = int(round(region["x"]))
+    region_y = int(round(region["y"]))
+    region_w = int(round(region["width"]))
+    region_h = int(round(region["height"]))
+    min_h = min(region_h, max(20, int(region_h * 0.70)))
+    max_h = region_h
+
+    if focus:
+        h_start = max(min_h, focus["height"] - height_step)
+        h_end = min(max_h, focus["height"] + height_step)
+        x_start = max(0, focus["local_x"] - step * 2)
+        x_end = min(region_w, focus["local_x"] + step * 2)
+        y_start = max(0, focus["local_y"] - step * 2)
+        y_end = min(region_h, focus["local_y"] + step * 2)
+    else:
+        h_start, h_end = min_h, max_h
+        x_start, x_end = 0, region_w
+        y_start, y_end = 0, region_h
+
+    best = None
+    columns, rows = samples
+    heights = list(range(h_start, h_end + 1, max(1, height_step)))
+    if h_end not in heights:
+        heights.append(h_end)
+    for height in heights:
+        width = int(round(height * aspect))
+        if width <= 0 or width > region_w:
+            continue
+        max_local_x = region_w - width
+        max_local_y = region_h - height
+        for local_y in range(y_start, min(y_end, max_local_y) + 1, step):
+            for local_x in range(x_start, min(x_end, max_local_x) + 1, step):
+                crop = {
+                    "x": region_x + local_x,
+                    "y": region_y + local_y,
+                    "width": width,
+                    "height": height,
+                }
+                score = _sampled_crop_score(
+                    native, host, crop, columns=columns, rows=rows
+                )
+                if not best or score < best["score"]:
+                    best = {
+                        "score": score,
+                        "crop": crop,
+                        "local_x": local_x,
+                        "local_y": local_y,
+                        "width": width,
+                        "height": height,
+                    }
+    return best
+
+
+def _estimate_ios_host_window_content_match(native, host, window):
+    bounds = window.get("bounds") or {}
+    try:
+        window_w = int(round(float(bounds["width"])))
+        window_h = int(round(float(bounds["height"])))
+    except (KeyError, TypeError, ValueError):
+        return {"error": "Simulator window bounds are unavailable"}
+
+    if window_w <= 0 or window_h <= 0:
+        return {"error": "Simulator window bounds are invalid"}
+
+    margin_left = max(0, int(round((host["width"] - window_w) / 2)))
+    margin_top = max(0, int(round((host["height"] - window_h) / 2)))
+    region = {
+        "x": margin_left,
+        "y": margin_top,
+        "width": min(window_w, host["width"] - margin_left),
+        "height": min(window_h, host["height"] - margin_top),
+    }
+    if region["width"] <= 0 or region["height"] <= 0:
+        return {"error": "host window screenshot is smaller than search region"}
+
+    coarse = _ios_content_match_search(
+        native, host, region, samples=(8, 14), step=8, height_step=16
+    )
+    if not coarse:
+        return {"error": "no candidate content rectangle could be searched"}
+    refined = _ios_content_match_search(
+        native,
+        host,
+        region,
+        samples=(14, 24),
+        step=2,
+        height_step=2,
+        focus=coarse,
+    ) or coarse
+
+    crop = refined["crop"]
+    local_x = crop["x"] - margin_left
+    local_y = crop["y"] - margin_top
+    return {
+        "available": True,
+        "method": "sampled-normalized-rgb-png-match",
+        "score_mean_abs_rgb": _display_number(refined["score"]),
+        "score_note": "Lower is better; 0 means exact sampled RGB match.",
+        "native_image": {
+            "width": native["width"],
+            "height": native["height"],
+        },
+        "host_window_image": {
+            "width": host["width"],
+            "height": host["height"],
+        },
+        "capture_margin_estimate": {
+            "left": margin_left,
+            "top": margin_top,
+            "right": max(0, host["width"] - margin_left - window_w),
+            "bottom": max(0, host["height"] - margin_top - window_h),
+            "coordinate_space": "host-window-screenshot-pixels",
+        },
+        "search_region": {
+            **region,
+            "coordinate_space": "host-window-screenshot-pixels",
+        },
+        "best_match": {
+            "screenshot_rect": {
+                "x": crop["x"],
+                "y": crop["y"],
+                "w": crop["width"],
+                "h": crop["height"],
+                "coordinate_space": "host-window-screenshot-pixels",
+            },
+            "simulator_window_rect_estimate": {
+                "x": _display_number(local_x),
+                "y": _display_number(local_y),
+                "w": crop["width"],
+                "h": crop["height"],
+                "coordinate_space": "simulator-window-points",
+            },
+            "native_pixels_to_simulator_window_points": _scale_report(
+                "native-device-pixels",
+                "simulator-window-points",
+                crop["width"] / native["width"],
+                crop["height"] / native["height"],
+                model="sampled-image-match",
+            ),
+        },
+    }
+
+
+def _matched_content_rect(content_match):
+    if not isinstance(content_match, dict):
+        return None
+    best = content_match.get("best_match")
+    if not isinstance(best, dict):
+        return None
+    rect = best.get("simulator_window_rect_estimate")
+    return rect if isinstance(rect, dict) else None
+
+
+def _ios_host_window_content_match_probe(xcrun, device_id, window):
+    if not window:
+        return {"error": "Simulator window is unavailable"}
+    if not shutil.which("screencapture"):
+        return {"error": "screencapture is not available on the host PATH"}
+
+    native_fd, native_path = tempfile.mkstemp(
+        suffix=".png", prefix="simctl_match_screenshot_"
+    )
+    host_fd, host_path = tempfile.mkstemp(
+        suffix=".png", prefix="simulator_window_match_"
+    )
+    os.close(native_fd)
+    os.close(host_fd)
+    target_device = device_id or "booted"
+    try:
+        native_command = [
+            xcrun,
+            "simctl",
+            "io",
+            target_device,
+            "screenshot",
+            "--type=png",
+            native_path,
+        ]
+        host_command = _macos_screencapture_command(
+            window["window_id"], host_path
+        )
+        native_result = _run_probe_command(native_command, timeout=12)
+        host_result = _run_probe_command(host_command, timeout=12)
+        result = {
+            "native_screenshot_command": native_result,
+            "host_window_screenshot_command": host_result,
+        }
+        if not native_result.get("ok"):
+            result["error"] = "native simulator screenshot failed"
+            return result
+        if not host_result.get("ok"):
+            result["error"] = "host window screenshot failed"
+            return result
+
+        native, native_error = _png_decode_rgb(native_path)
+        host, host_error = _png_decode_rgb(host_path)
+        if native_error or host_error:
+            result["error"] = native_error or host_error
+            return result
+        result.update(_estimate_ios_host_window_content_match(
+            native, host, window
+        ))
+        return result
+    finally:
+        for path in (native_path, host_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _run_simctl_screenshot_probe(xcrun, device_id=None):
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".png", prefix="simctl_probe_screenshot_"
+    )
+    os.close(fd)
+    target_device = device_id or "booted"
+    try:
+        result = _run_probe_command(
+            [
+                xcrun,
+                "simctl",
+                "io",
+                target_device,
+                "screenshot",
+                "--type=png",
+                tmp_path,
+            ],
+            timeout=12,
+        )
+        dimensions = _png_dimensions(tmp_path)
+        if dimensions:
+            result["image"] = dimensions
+            try:
+                result["image"]["size_bytes"] = os.path.getsize(tmp_path)
+            except OSError:
+                pass
+        return result
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _ios_simulator_window_candidates():
+    try:
+        windows = _macos_coregraphics_windows()
+    except OSError as e:
+        return {"error": f"failed to query CoreGraphics windows: {e}"}
+
+    candidates = []
+    for window in windows:
+        owner = str(window.get("owner_name") or "")
+        title = str(window.get("name") or "")
+        haystack = f"{owner} {title}".lower()
+        if "simulator" not in haystack:
+            continue
+        if window.get("layer") not in (None, 0):
+            continue
+        if window.get("onscreen") is False:
+            continue
+        if window.get("alpha", 1) <= 0:
+            continue
+        bounds = window.get("bounds")
+        if not bounds:
+            continue
+        x, y, width, height = bounds
+        if width <= 0 or height <= 0:
+            continue
+        candidates.append({
+            "window_id": window.get("window_id"),
+            "pid": window.get("pid"),
+            "owner_name": owner,
+            "name": title,
+            "bounds": {
+                "x": _display_number(x),
+                "y": _display_number(y),
+                "width": _display_number(width),
+                "height": _display_number(height),
+            },
+        })
+    candidates.sort(
+        key=lambda window: (
+            -window["bounds"]["width"] * window["bounds"]["height"],
+            window["bounds"]["y"],
+            window["bounds"]["x"],
+        )
+    )
+    return {"candidates": candidates[:10], "count": len(candidates)}
+
+
+def ios_simulator_probe(device_id=None):
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        return {
+            "available": False,
+            "xcrun": None,
+            "error": "xcrun is not available on the host PATH",
+            "commands": {},
+            "features": {
+                "simctl_io_subcommand": False,
+                "simctl_ui_subcommand": False,
+                "mentions_touch_or_tap": False,
+                "mentions_keyboard_or_text": False,
+            },
+            "input_backend": {
+                "coordinate_tap": {
+                    "viable": False,
+                    "reason": "xcrun is unavailable",
+                },
+                "text_entry": {
+                    "viable": False,
+                    "reason": "xcrun is unavailable",
+                },
+            },
+        }
+
+    commands = {
+        "simctl_help": _run_probe_command([xcrun, "simctl", "help"]),
+        "simctl_help_io": _run_probe_command(
+            [xcrun, "simctl", "help", "io"]
+        ),
+        "simctl_io_help": _run_probe_command(
+            [xcrun, "simctl", "io", "help"]
+        ),
+        "simctl_help_ui": _run_probe_command(
+            [xcrun, "simctl", "help", "ui"]
+        ),
+        "simctl_ui_help": _run_probe_command(
+            [xcrun, "simctl", "ui", "help"]
+        ),
+        "booted_devices": _run_probe_command(
+            [xcrun, "simctl", "list", "devices", "booted", "--json"],
+            timeout=12,
+        ),
+        "selected_screenshot": _run_simctl_screenshot_probe(
+            xcrun, device_id=device_id
+        ),
+    }
+    conclusions = _simctl_input_conclusions(commands)
+    return {
+        "available": True,
+        "xcrun": xcrun,
+        "device_id": device_id,
+        "commands": commands,
+        "simulator_windows": _ios_simulator_window_candidates(),
+        **conclusions,
+    }
 
 
 def build_screenshot_status(bridge_status, has_process, device_id, target):
@@ -1810,6 +3189,8 @@ def build_ui_automation_status(
         "coordinate_space": (
             "app-window-points"
             if ready and backend == "macos-desktop"
+            else "simulator-window-points"
+            if ready and backend == "ios-simulator"
             else None
         ),
         "screen": None,
@@ -1958,37 +3339,20 @@ def validate_ui_action(action, body):
         return {"key": return_key}, None
 
     if action == "scroll":
-        edge = body.get("edge")
-        has_edge = edge is not None
-        has_delta = "dx" in body or "dy" in body
-        if has_edge and has_delta:
+        move = body.get("move")
+        if move is None:
             return None, bridge_error(
-                "'edge' is mutually exclusive with 'dx'/'dy'",
-                "INVALID_BODY",
+                "Provide 'move'", "INVALID_BODY"
             )
-        if has_edge:
-            if edge not in ("top", "bottom", "left", "right"):
-                return None, bridge_error(
-                    "'edge' must be one of top, bottom, left, right",
-                    "INVALID_BODY",
-                )
-            return {"edge": edge}, None
-        if not has_delta:
+        if set(body) != {"move"}:
             return None, bridge_error(
-                "Provide 'dx', 'dy', or 'edge'", "INVALID_BODY"
+                "Only 'move' is accepted for scroll", "INVALID_BODY"
             )
-        parsed = {}
-        for field in ("dx", "dy"):
-            if field in body:
-                value, err = numeric_value(body[field], field)
-                if err:
-                    return None, bridge_error(err, "INVALID_BODY")
-                parsed[field] = value
-        if parsed.get("dx", 0) == 0 and parsed.get("dy", 0) == 0:
+        if move not in ("top", "up", "down"):
             return None, bridge_error(
-                "Scroll delta must be non-zero", "INVALID_BODY"
+                "'move' must be one of top, up, down", "INVALID_BODY"
             )
-        return parsed, None
+        return {"move": move}, None
 
     if action == "inspect":
         return validate_selector_body(body, selector_required=False)
@@ -2100,23 +3464,43 @@ def _reader_thread(state, proc):
                         )
                         if state.subprocess_type == "run":
                             state.status = "running"
+                            state._status_message = "Flutter run is active"
                         elif state.subprocess_type == "attach":
                             state.status = "attached"
+                            state._status_message = "Flutter attach is active"
                         break
 
         returncode = proc.wait()
         if not state.stop_event.is_set():
+            previous_subprocess_type = state.subprocess_type
             state.add_log(
                 f"[BRIDGE] Flutter process exited with code {returncode}"
             )
-            state.status = "idle"
+            if returncode == 0:
+                state.status = "idle"
+                state._status_message = "Flutter process exited"
+            else:
+                state.status = "error"
+                if state.vm_service_url is None:
+                    state._status_message = (
+                        f"Flutter {previous_subprocess_type or 'process'} "
+                        f"exited with code {returncode} before the VM service "
+                        "became available. Check flutterctl logs for details."
+                    )
+                else:
+                    state._status_message = (
+                        f"Flutter {previous_subprocess_type or 'process'} "
+                        f"exited with code {returncode}. Check flutterctl "
+                        "logs for details."
+                    )
             state.subprocess_type = None
             state.process = None
             state.vm_service_url = None
     except Exception as e:
         if not state.stop_event.is_set():
             state.add_log(f"[BRIDGE] Error reading subprocess output: {e}")
-            state.status = "idle"
+            state.status = "error"
+            state._status_message = f"Error reading Flutter process output: {e}"
             state.subprocess_type = None
             state.process = None
             state.vm_service_url = None
@@ -2152,6 +3536,9 @@ def start_subprocess(state, mode, device_id):
 
         try:
             state.status = "launching"
+            state._status_message = (
+                f"Flutter {mode} starting for device {device_id or 'default'}"
+            )
             state.subprocess_type = mode
             state.device_id = device_id
             state.vm_service_url = None
@@ -2184,6 +3571,7 @@ def start_subprocess(state, mode, device_id):
             state.status = "error"
             state.subprocess_type = None
             state.vm_service_url = None
+            state._status_message = f"Failed to start flutter {mode}: {e}"
             state.add_log(f"[BRIDGE] Failed to start flutter {mode}: {e}")
             return {"error": f"Failed to start flutter {mode}: {e}"}
 
@@ -2239,6 +3627,7 @@ def stop_subprocess(state):
             state.subprocess_type = None
             state.vm_service_url = None
             state.status = "idle"
+            state._status_message = "Flutter process stopped"
             state.stop_event.clear()
             state.add_log("[BRIDGE] Flutter process stopped")
 
@@ -2328,6 +3717,21 @@ class FlutterBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"logs": self.bridge_state.get_logs()})
             elif path == '/screenshot':
                 self._handle_screenshot()
+            elif path == '/ios-simulator-probe':
+                self._send_json(
+                    ios_simulator_probe(self.bridge_state.device_id)
+                )
+            elif path == '/ios-coordinate-map':
+                metadata = self.bridge_state.active_device_metadata()
+                target = classify_device(self.bridge_state.device_id, metadata)
+                device = target.get("device") or {}
+                self._send_json(
+                    ios_coordinate_map(
+                        self.bridge_state.vm_service_url,
+                        device_id=self.bridge_state.device_id,
+                        device_name=device.get("name"),
+                    )
+                )
             else:
                 self._send_json(
                     {"error": f"Unknown endpoint: {path}"}, 404
@@ -2350,6 +3754,13 @@ class FlutterBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"message": "Stopping bridge..."})
             threading.Thread(
                 target=self._shutdown_bridge, daemon=True
+            ).start()
+            return
+
+        if path == '/restart':
+            self._send_json({"message": "Restarting bridge..."})
+            threading.Thread(
+                target=self._restart_bridge, daemon=True
             ).start()
             return
 
@@ -2600,6 +4011,16 @@ class FlutterBridgeHandler(BaseHTTPRequestHandler):
         stop_subprocess(self.bridge_state)
         self.bridge_state.stop_event.set()
         os._exit(0)
+
+    def _restart_bridge(self):
+        time.sleep(0.5)
+        stop_subprocess(self.bridge_state)
+        self.bridge_state.stop_event.set()
+        try:
+            self.server.server_close()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 # ---- Main ----
