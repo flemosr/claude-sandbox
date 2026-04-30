@@ -67,6 +67,8 @@ flutterctl test
 
 If the bridge is unavailable, tell the user they can either run `workcell start-flutter-bridge` on the host from the Flutter project directory or restart the sandbox with `--with-flutter`.
 
+If the bridge is reachable but running stale bridge code, use `flutterctl restart-bridge`. This authenticated command re-execs the existing host bridge process with the same launch settings.
+
 `--with-flutter` and `--with-chrome` are mutually exclusive. In Flutter mode, `--port <port>` selects the host Flutter bridge port and does not expose a container dev-server port.
 
 Connection details and optional launch settings live in `.workcell/flutter-config.json`:
@@ -95,10 +97,12 @@ flutterctl devices                    # List available host Flutter devices
 flutterctl launch [-d <device>]       # Launch on a device
 flutterctl attach [-d <device>]       # Attach to an already-running app
 flutterctl detach                     # Stop the app process managed by the bridge
+flutterctl restart-bridge             # Restart the host bridge process
 flutterctl hot-reload                 # Hot reload
 flutterctl hot-restart                # Hot restart
 flutterctl logs                       # Recent Flutter logs
 flutterctl screenshot -o <path>       # Screenshot; use .workcell/artifacts/
+flutterctl ios-map                    # Diagnose iOS coordinate mapping when applicable
 flutterctl inspect                    # Discover visible UI state when supported
 flutterctl inspect --key <key>        # Inspect a keyed widget when supported
 flutterctl inspect --text <text>      # Inspect resolvable visible text when supported
@@ -107,7 +111,7 @@ flutterctl tap --text "Sign in"       # Tap visible text when supported
 flutterctl tap --x 150 --y 300        # Coordinate tap when supported
 flutterctl type "hello"               # Type into focused input when supported
 flutterctl press enter                # Press a named key when supported
-flutterctl scroll --dy 600            # Scroll when supported
+flutterctl scroll --move down         # Scroll when supported
 flutterctl wait --key <key>           # Wait for keyed widget when supported
 flutterctl wait --text "Ready"        # Wait for visible text when supported
 ```
@@ -141,15 +145,20 @@ For tasks that require a running native/device target:
 Launch examples:
 
 ```bash
-flutterctl launch --device ios
+flutterctl devices
+flutterctl launch --device <ios-simulator-uuid>
 flutterctl launch --device macos
 flutterctl launch --device emulator-5554
 ```
 
+iOS Simulators usually need the exact device id shown by `flutterctl devices`, such as a
+CoreSimulator UUID. `--device ios` only works if Flutter reports a device whose name or id matches
+`ios`.
+
 Attach example:
 
 ```bash
-flutterctl attach --device ios
+flutterctl attach --device <ios-simulator-uuid>
 ```
 
 Screenshot example:
@@ -159,6 +168,11 @@ flutterctl screenshot -o .workcell/artifacts/20260429-132400-before.png
 flutterctl hot-reload
 flutterctl screenshot -o .workcell/artifacts/20260429-132405-after.png
 ```
+
+`flutterctl hot-reload` and `flutterctl hot-restart` send `r`/`R` to the host Flutter process and
+return after the command is written. They do not wait for compilation or frame rendering to finish.
+Before taking screenshots or running UI automation, wait briefly or poll for the expected UI state
+with `flutterctl wait`.
 
 On macOS desktop, screenshots are app-window-only. If the bridge cannot identify the Flutter window or host privacy permissions block capture, the command fails instead of capturing the full screen.
 
@@ -189,12 +203,29 @@ Stable `ValueKey<String>` values make automation reliable. Prefer keys on import
 
 Text selectors are not arbitrary Flutter selectors. They work only for elements whose bounds can be resolved through inspect, accessibility, or selected tooltip labels. Key selectors require Flutter inspector key and layout data for the same widget.
 
-Current UI automation target scope is narrow: iOS Simulator and macOS desktop only. Android, Linux desktop, Windows desktop, physical iOS, and Flutter web should be treated as unsupported by the Flutter bridge UI action API.
+Current Flutter bridge UI automation scope is narrow: macOS hosts only, targeting iOS Simulator and macOS desktop apps. Android, Linux desktop, Windows desktop, physical iOS, Flutter web, and non-macOS hosts should be treated as unsupported by the Flutter bridge UI action API.
+
+On iOS Simulator:
+
+- Screenshots use `flutter screenshot` and capture the device screen.
+- `inspect` and `wait` use Flutter VM-service inspector data and support `--key` and `--text` selectors when the launched app exposes a VM service.
+- Inspector rectangles are reported in `flutter-logical-points`; do not pass them directly to coordinate taps.
+- Coordinate taps use `simulator-window-points`; `x=0,y=0` is the top-left of the visible host Simulator window reported in `status.ui_automation.screen.simulator_window`.
+- Coordinate taps require the host Simulator window to be visible and unminimized. If `status.ui_automation.screen` reports an error, coordinate taps should be treated as unavailable.
+- `tap --key` and `tap --text` use Flutter inspector rectangles plus a sampled image match between the native simulator screenshot and host Simulator window capture. They require a visible Simulator window and host `screencapture`.
+- `type` sends host keystrokes to the currently focused control in the Simulator. Focus a text field first; the command does not choose a target by selector.
+- After tapping a text field on iOS, wait briefly before typing so the keyboard and focused input are ready.
+- The keystroke typing backend avoids the iOS paste permission prompt, but may be less suitable for long text or unusual characters than a future paste-based implementation.
+- `press` sends a focused key event to the host Simulator process. This is intended for keys such as `enter`, `tab`, `backspace`, and arrow keys.
+- `scroll` approximates vertical scrolling with focused key dispatch. `--move top` sends `home`, `--move up` sends `pageup`, and `--move down` sends `pagedown`. This is not pixel-accurate.
+- With multiple booted iOS Simulators, launch or attach with an explicit device id. The bridge uses the selected device id for native screenshot probes and prefers the visible Simulator window whose title matches the selected Flutter device name.
+- `flutterctl ios-map` reports native screenshot size, selected Simulator window bounds, host-window screenshot dimensions, sampled device-content match, host Simulator Accessibility frames when available, Flutter inspector root size, and coordinate estimates.
+- Current research points to XCTest/XCUI gestures as Apple's supported automation surface for precise swipes/drags; `simctl` exposes screenshot/video and simulator UI settings but no verified direct scroll primitive in the bridge probes.
 
 On macOS desktop:
 
 - Coordinate taps use `app-window-points`; `x=0,y=0` is the top-left of the Flutter app window reported in `status.ui_automation.screen`.
-- `scroll` approximates scrolling with keyboard dispatch. `dx` and `dy` choose direction and dominant axis, not exact pixels.
+- `scroll` approximates scrolling with keyboard dispatch. `--move top` sends `home`, `--move up` sends `pageup`, and `--move down` sends `pagedown`; it is not pixel-accurate.
 - Inspect, wait, and selector taps use host Accessibility plus Flutter inspector previews, keys, and selected tooltip labels when a VM service is available.
 
 ## Troubleshooting

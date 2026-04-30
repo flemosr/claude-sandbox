@@ -130,6 +130,10 @@ class FlutterCtl:
         """Detach/stop the Flutter app."""
         return self._request("POST", "/detach")
 
+    def restart_bridge(self):
+        """Restart the host bridge process with the same launch settings."""
+        return self._request("POST", "/restart", timeout=5)
+
     def hot_reload(self):
         """Trigger hot reload."""
         return self._request("POST", "/hot-reload", timeout=60)
@@ -153,6 +157,14 @@ class FlutterCtl:
             f.write(data)
         return {"path": output_path, "size": len(data)}
 
+    def ios_probe(self):
+        """Probe fixed host iOS Simulator input capabilities."""
+        return self._request("GET", "/ios-simulator-probe", timeout=30)
+
+    def ios_map(self):
+        """Diagnose iOS Simulator coordinate mapping."""
+        return self._request("GET", "/ios-coordinate-map", timeout=30)
+
     def tap(self, x=None, y=None, text=None, key=None):
         """Tap coordinates or an element selected by text/key."""
         body = {}
@@ -175,16 +187,9 @@ class FlutterCtl:
         """Press a named key or key combination."""
         return self._request("POST", "/press", body={"key": key})
 
-    def scroll(self, dx=None, dy=None, edge=None):
-        """Scroll by delta or to an edge."""
-        body = {}
-        if dx is not None:
-            body["dx"] = dx
-        if dy is not None:
-            body["dy"] = dy
-        if edge is not None:
-            body["edge"] = edge
-        return self._request("POST", "/scroll", body=body)
+    def scroll(self, move):
+        """Scroll using a simple named movement."""
+        return self._request("POST", "/scroll", body={"move": move})
 
     def inspect(self, text=None, key=None):
         """Inspect the current UI automation tree or selector match."""
@@ -245,6 +250,11 @@ def main():
 
     subparsers.add_parser("detach", help="Detach/stop Flutter app")
 
+    subparsers.add_parser(
+        "restart-bridge",
+        help="Restart the host bridge process with the same launch settings",
+    )
+
     subparsers.add_parser("hot-reload", help="Hot reload the Flutter app")
 
     subparsers.add_parser("hot-restart", help="Hot restart the Flutter app")
@@ -257,6 +267,15 @@ def main():
     )
     screenshot_parser.add_argument(
         "--output", "-o", required=True, help="Output file path"
+    )
+
+    subparsers.add_parser(
+        "ios-probe",
+        help="Probe host iOS Simulator input capabilities",
+    )
+    subparsers.add_parser(
+        "ios-map",
+        help="Diagnose iOS Simulator coordinate mapping",
     )
 
     tap_parser = subparsers.add_parser(
@@ -282,13 +301,14 @@ def main():
     press_parser.add_argument("key", help="Key name, e.g. enter or command+r")
 
     scroll_parser = subparsers.add_parser(
-        "scroll", help="Scroll by delta or to an edge"
+        "scroll", help="Scroll by named movement"
     )
-    scroll_parser.add_argument("--dx", type=float, help="Horizontal delta")
-    scroll_parser.add_argument("--dy", type=float, help="Vertical delta")
     scroll_parser.add_argument(
-        "--edge", choices=["top", "bottom", "left", "right"],
-        help="Scroll to an edge",
+        "--move", required=True, choices=["top", "up", "down"],
+        help=(
+            "Scroll movement: top sends home, up sends pageup, "
+            "down sends pagedown"
+        ),
     )
 
     inspect_parser = subparsers.add_parser(
@@ -355,6 +375,10 @@ def main():
             result = ctl.detach()
             print(json.dumps(result, indent=2))
 
+        elif args.command == "restart-bridge":
+            result = ctl.restart_bridge()
+            print_json_result(result)
+
         elif args.command == "hot-reload":
             result = ctl.hot_reload()
             if "error" in result:
@@ -384,6 +408,14 @@ def main():
                 sys.exit(1)
             print(f"Screenshot saved to {result['path']} ({result['size']} bytes)")
 
+        elif args.command == "ios-probe":
+            result = ctl.ios_probe()
+            print_json_result(result)
+
+        elif args.command == "ios-map":
+            result = ctl.ios_map()
+            print_json_result(result)
+
         elif args.command == "tap":
             result = ctl.tap(
                 x=args.x, y=args.y, text=args.text, key=args.key
@@ -399,7 +431,7 @@ def main():
             print_json_result(result)
 
         elif args.command == "scroll":
-            result = ctl.scroll(dx=args.dx, dy=args.dy, edge=args.edge)
+            result = ctl.scroll(args.move)
             print_json_result(result)
 
         elif args.command == "inspect":
