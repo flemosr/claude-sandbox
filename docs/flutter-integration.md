@@ -150,10 +150,13 @@ to macOS desktop apps and iOS Simulator targets on those hosts. macOS desktop au
 Accessibility and Screen Recording permissions, so the first run may trigger privacy prompts. iOS
 Simulator coordinate taps require the host Simulator window to be visible and unminimized.
 
-Prefer widget-key selectors for agent-driven Flutter UI interactions when the app can provide them.
-Stable, descriptive `ValueKey<String>` values on controls and important containers give agents a
-reliable target independent of visible copy, localization, and layout changes. Useful examples:
-`login_button`, `email_field`, `settings_tab`, `todo_list`, and `delete_item_0`.
+Prefer stable semantics identifiers for agent-driven Flutter UI interactions when the app can
+provide them. Use `Semantics(identifier: 'login_button', child: ...)` on controls and important
+containers so selectors are independent of visible copy, localization, and layout changes. Useful
+examples: `login_button`, `email_field`, `settings_tab`, `todo_list`, and `delete_item_0`.
+When building or modifying Flutter UI, add a `Semantics.identifier` to every element that should be
+selectable by automation. A `ValueKey` alone is useful for Flutter widget tests, but it is not the
+automation selector contract for the bridge.
 
 UI automation is currently scoped to iOS Simulator and macOS desktop backends on macOS hosts.
 Android, Linux desktop, Windows desktop, physical iOS, Flutter web, and non-macOS hosts are not
@@ -161,12 +164,12 @@ supported by the Flutter bridge UI action API.
 
 iOS Simulator supports:
 
-- `flutterctl inspect` and `flutterctl wait` with `--key` and `--text` selectors through the
-  Flutter VM-service inspector.
+- `flutterctl inspect` and `flutterctl wait` with `--key` selectors through Flutter VM-service
+  semantics identifiers. `--text` uses Flutter VM-service inspector text data.
 - `flutterctl tap --x <x> --y <y>` in `simulator-window-points`, relative to
   `status.ui_automation.screen.simulator_window`.
-- `flutterctl tap --key <key>` through Flutter inspector selectors, defaulting to the center of
-  the matched widget rectangle after mapping it into the visible host Simulator window.
+- `flutterctl tap --key <key>` through Flutter VM-service semantics identifiers, defaulting to the
+  semantics rect center after mapping it into the visible host Simulator window.
 - `flutterctl tap --text <text>` through Flutter inspector selectors, with widget screenshot
   matching when available and the same mapped rectangle-center fallback.
 - `flutterctl type "text"` into the currently focused control. The bridge sends host keystrokes to
@@ -183,13 +186,13 @@ When multiple iOS Simulators are booted, launch or attach with an explicit devic
 uses that selected id for native screenshot probes and prefers the visible Simulator window whose
 title matches the selected Flutter device name.
 
-iOS inspector rectangles are reported in `flutter-logical-points`; selector taps map them to
-`simulator-window-points` at action time. Key selector taps use the mapped rectangle center, which
-is usually the right target for circular controls such as FABs. Typing requires the intended text
-field to already be focused. After tapping a text field, wait briefly before typing so the iOS
-keyboard and focused input are ready. The keystroke backend avoids the iOS paste permission prompt,
-but may be less suitable for long text or unusual characters than a future paste-based
-implementation.
+iOS semantics and inspector rectangles are reported in `flutter-logical-points`; selector taps map
+them to `simulator-window-points` at action time. Semantics identifiers are preferred because their
+rects reflect Flutter semantics geometry and have proven more reliable for bottom sheets and
+overlays than inspector layout rectangles. Typing requires the intended text field to already be
+focused. After tapping a text field, wait briefly before typing so the iOS keyboard and focused
+input are ready. The keystroke backend avoids the iOS paste permission prompt, but may be less
+suitable for long text or unusual characters than a future paste-based implementation.
 
 The current scroll research points to XCTest/XCUI as Apple's supported gesture automation surface:
 `XCUICoordinate` supports swipes, coordinate scrolling, and press-then-drag gestures. Apple's

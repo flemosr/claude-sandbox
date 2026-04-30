@@ -215,27 +215,29 @@ Do not assume coordinate taps, selectors, scrolling, typing, or waits are availa
 Prefer this order for agent-driven interaction:
 
 1. `flutterctl inspect` to discover visible text, widget keys, widget types, and rectangles.
-2. `flutterctl inspect --key <key>` when a stable key should exist.
+2. `flutterctl inspect --key <key>` when a stable automation identifier should exist.
 3. `flutterctl tap --key` or `flutterctl wait --key` when key selectors are supported.
 4. Text selectors when inspect can resolve visible text to a rectangle.
 5. Coordinate taps only when selectors are unavailable and coordinates are known.
 6. Screenshots when visual layout is ambiguous or after UI changes need visual validation.
 
-Stable `ValueKey<String>` values make automation reliable. Prefer keys on important controls and containers such as `login_button`, `email_field`, `settings_tab`, `todo_list`, and repeated row actions like `delete_item_0`.
+Stable `Semantics.identifier` values make automation reliable. Prefer identifiers on important controls and containers such as `login_button`, `email_field`, `settings_tab`, `todo_list`, and repeated row actions like `delete_item_0`.
 
-Text selectors are not arbitrary Flutter selectors. They work only for elements whose bounds can be resolved through inspect, accessibility, or selected tooltip labels. Key selectors require Flutter inspector key and layout data for the same widget.
+When building or modifying Flutter UI, add `Semantics(identifier: '<automation_id>', child: ...)` to every element that should be selectable by `flutterctl inspect --key`, `wait --key`, or `tap --key`. A `ValueKey` alone is useful for Flutter widget tests, but it is not the bridge automation selector contract.
+
+Text selectors are not arbitrary Flutter selectors. They work only for elements whose bounds can be resolved through inspect, accessibility, or selected tooltip labels. Key selectors use Flutter semantics identifiers.
 
 Current Flutter bridge UI automation scope is narrow: macOS hosts only, targeting iOS Simulator and macOS desktop apps. Android, Linux desktop, Windows desktop, physical iOS, Flutter web, and non-macOS hosts should be treated as unsupported by the Flutter bridge UI action API.
 
 On iOS Simulator:
 
 - Screenshots use `flutter screenshot` and capture the device screen.
-- `inspect` and `wait` use Flutter VM-service inspector data and support `--key` and `--text` selectors when the launched app exposes a VM service.
+- `inspect` and `wait` use Flutter VM-service semantics data for `--key` selectors and inspector data for `--text` selectors when the launched app exposes a VM service.
 - `inspect` rectangles are reported in `flutter-logical-points`.
 - `tap --x --y` uses `simulator-window-points`; `x=0,y=0` is the top-left of the visible host Simulator window reported in `status.ui_automation.screen.simulator_window`.
 - Use `flutterctl ios-map` to inspect the current mapping estimate before converting inspected rectangles into coordinate taps.
 - Coordinate taps require the host Simulator window to be visible and unminimized. If `status.ui_automation.screen` reports an error, coordinate taps should be treated as unavailable.
-- `tap --key` uses Flutter inspector selectors and defaults to the center of the matched widget rectangle after mapping it into the visible host Simulator window.
+- `tap --key` uses Flutter VM-service semantics identifiers and defaults to the matched semantics rect center after mapping it into the visible host Simulator window.
 - `tap --text` uses Flutter inspector selectors, widget screenshot matching when available, and the same mapped rectangle-center fallback.
 - `type` sends host keystrokes to the currently focused control in the Simulator. Focus a text field first; the command does not choose a target by selector.
 - After tapping a text field on iOS, wait briefly before typing so the keyboard and focused input are ready.
