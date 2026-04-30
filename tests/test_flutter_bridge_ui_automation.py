@@ -2226,6 +2226,16 @@ class BridgeHttpUiTests(unittest.TestCase):
             method="POST",
         )
 
+    def get_request(self, path, token="secret"):
+        headers = {}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        return urllib.request.Request(
+            f"{self.base_url}{path}",
+            headers=headers,
+            method="GET",
+        )
+
     def test_auth_required_for_ui_action(self):
         req = self.request("/tap", {"x": 1, "y": 2}, token=None)
 
@@ -2295,6 +2305,47 @@ class BridgeHttpUiTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 400)
         payload = json.loads(ctx.exception.read().decode())
         self.assertIn("Provide 'device' in request body", payload["error"])
+
+    def test_ios_coordinate_map_rejects_non_ios_target(self):
+        req = self.get_request("/ios-coordinate-map")
+
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 501)
+        payload = json.loads(ctx.exception.read().decode())
+        self.assertEqual(payload["code"], "UNSUPPORTED_TARGET")
+        self.assertEqual(payload["backend"], "macos-desktop")
+        self.assertIn("iOS Simulator", payload["error"])
+
+    def test_ios_coordinate_map_dispatches_for_ios_simulator(self):
+        self.state.device_id = "8F0F"
+        self.state._devices_cache = [
+            {
+                "id": "8F0F",
+                "name": "iPhone 17",
+                "targetPlatform": "ios",
+                "emulator": True,
+            }
+        ]
+        self.state._devices_cache_time = time.time()
+        req = self.get_request("/ios-coordinate-map")
+
+        with mock.patch.object(
+            bridge_ios,
+            "ios_coordinate_map",
+            return_value={"available": True, "ok": True},
+        ) as coordinate_map:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                payload = json.loads(resp.read().decode())
+
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(payload["ok"], True)
+        coordinate_map.assert_called_once_with(
+            self.state.vm_service_url,
+            device_id="8F0F",
+            device_name="iPhone 17",
+        )
 
     def test_ui_action_reports_ui_not_ready_while_launching(self):
         class _MockProcess:

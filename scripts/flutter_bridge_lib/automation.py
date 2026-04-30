@@ -3724,6 +3724,20 @@ class FlutterBridgeHandler(BaseHTTPRequestHandler):
             elif path == '/ios-coordinate-map':
                 metadata = self.bridge_state.active_device_metadata()
                 target = classify_device(self.bridge_state.device_id, metadata)
+                if target["backend"] != "ios-simulator":
+                    self._send_json(
+                        bridge_error(
+                            "ios-map is only supported for iOS Simulator "
+                            "targets. Launch or attach to an iOS Simulator "
+                            "device first.",
+                            "UNSUPPORTED_TARGET",
+                            backend=target["backend"],
+                            target_platform=target["target_platform"],
+                            device_kind=target["device_kind"],
+                        ),
+                        501,
+                    )
+                    return
                 device = target.get("device") or {}
                 self._send_json(
                     ios_coordinate_map(
