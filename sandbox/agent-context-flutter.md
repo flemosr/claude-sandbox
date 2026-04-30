@@ -5,7 +5,7 @@ SDK tooling (`flutter test`, `flutter analyze`, `dart format`, `flutter pub`),
 native/device targets, the host Flutter bridge, hot reload, screenshots, or UI
 automation.
 
-For Flutter web, use [agent-context-web.md](agent-context-web.md) instead.
+For Flutter web, read sibling `agent-context-web.md` and use the web development workflow instead.
 
 ## Container Flutter SDK
 
@@ -155,10 +155,22 @@ iOS Simulators usually need the exact device id shown by `flutterctl devices`, s
 CoreSimulator UUID. `--device ios` only works if Flutter reports a device whose name or id matches
 `ios`.
 
-Attach example:
+Attach to an app that is already running from a host terminal, Xcode, or another Flutter tool:
 
 ```bash
+flutterctl devices
 flutterctl attach --device <ios-simulator-uuid>
+flutterctl status
+```
+
+### Switching Targets
+
+The bridge manages one Flutter app process at a time. Before launching or attaching to a different
+device, detach from the current app:
+
+```bash
+flutterctl detach
+flutterctl launch --device <new-device>
 ```
 
 Screenshot example:
@@ -166,6 +178,7 @@ Screenshot example:
 ```bash
 flutterctl screenshot -o .workcell/artifacts/20260429-132400-before.png
 flutterctl hot-reload
+flutterctl wait --text "Updated Title"
 flutterctl screenshot -o .workcell/artifacts/20260429-132405-after.png
 ```
 
@@ -209,8 +222,9 @@ On iOS Simulator:
 
 - Screenshots use `flutter screenshot` and capture the device screen.
 - `inspect` and `wait` use Flutter VM-service inspector data and support `--key` and `--text` selectors when the launched app exposes a VM service.
-- Inspector rectangles are reported in `flutter-logical-points`; do not pass them directly to coordinate taps.
-- Coordinate taps use `simulator-window-points`; `x=0,y=0` is the top-left of the visible host Simulator window reported in `status.ui_automation.screen.simulator_window`.
+- `inspect` rectangles are reported in `flutter-logical-points`.
+- `tap --x --y` uses `simulator-window-points`; `x=0,y=0` is the top-left of the visible host Simulator window reported in `status.ui_automation.screen.simulator_window`.
+- Use `flutterctl ios-map` to inspect the current mapping estimate before converting inspected rectangles into coordinate taps.
 - Coordinate taps require the host Simulator window to be visible and unminimized. If `status.ui_automation.screen` reports an error, coordinate taps should be treated as unavailable.
 - `tap --key` and `tap --text` use Flutter inspector rectangles plus a sampled image match between the native simulator screenshot and host Simulator window capture. They require a visible Simulator window and host `screencapture`.
 - `type` sends host keystrokes to the currently focused control in the Simulator. Focus a text field first; the command does not choose a target by selector.
@@ -219,7 +233,7 @@ On iOS Simulator:
 - `press` sends a focused key event to the host Simulator process. This is intended for keys such as `enter`, `tab`, `backspace`, and arrow keys.
 - `scroll` approximates vertical scrolling with focused key dispatch. `--move top` sends `home`, `--move up` sends `pageup`, and `--move down` sends `pagedown`. This is not pixel-accurate.
 - With multiple booted iOS Simulators, launch or attach with an explicit device id. The bridge uses the selected device id for native screenshot probes and prefers the visible Simulator window whose title matches the selected Flutter device name.
-- `flutterctl ios-map` reports native screenshot size, selected Simulator window bounds, host-window screenshot dimensions, sampled device-content match, host Simulator Accessibility frames when available, Flutter inspector root size, and coordinate estimates.
+- `flutterctl ios-map` is an iOS Simulator diagnostic. It reports native screenshot size, selected Simulator window bounds, host-window screenshot dimensions, sampled device-content match, host Simulator Accessibility frames when available, Flutter inspector root size, and coordinate estimates. On non-iOS-Simulator targets it returns `UNSUPPORTED_TARGET`.
 - Current research points to XCTest/XCUI gestures as Apple's supported automation surface for precise swipes/drags; `simctl` exposes screenshot/video and simulator UI settings but no verified direct scroll primitive in the bridge probes.
 
 On macOS desktop:
@@ -249,3 +263,9 @@ echo "URL: $FLUTTER_BRIDGE_URL"
 ```
 
 If `flutterctl test` succeeds but `flutterctl launch` fails, inspect the bridge log for Flutter build errors on the host side.
+
+Common first-run errors:
+
+> **Error: Flutter app is already run/running/attached** - Run `flutterctl detach` before launching or attaching to a different device.
+>
+> **Flutter doctor shows missing SDKs** - This can be expected in the container. Native iOS and Android targets run through the host bridge; use the container Flutter SDK for tests, analysis, formatting, and package management.

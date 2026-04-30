@@ -232,7 +232,8 @@ Volume commands affect the persisted user data described below.
 - Dev server ports can be exposed with `--port <port>` except in Flutter mode, where `--port`
   selects the host bridge port.
 - A global context file is injected as `~/.claude/CLAUDE.md`, `~/.config/opencode/AGENTS.md`, and
-  `~/.codex/AGENTS.md`, with linked tool-specific context docs copied alongside it.
+  `~/.codex/AGENTS.md`; focused tool-specific context docs are copied into the same directory as
+  the injected context file.
 
 ## Persistence
 
