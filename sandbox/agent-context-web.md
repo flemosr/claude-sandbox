@@ -73,7 +73,7 @@ If the requested port is not exposed, use an exposed port when possible. If no s
 ```bash
 browser test                    # Test connection to Chrome
 browser goto <url>              # Navigate to URL
-browser screenshot [-o path]    # Take screenshot; use .workcell/artifacts/
+browser screenshot [-o path]    # Take screenshot; use .workcell/artifacts/screenshots/ when useful
 browser click <selector>        # Click by CSS selector
 browser fill <selector> <text>  # Fill form field
 browser console                 # Read browser console logs
@@ -90,7 +90,7 @@ from browser import Browser
 
 async with Browser() as b:
     await b.goto("http://localhost:3000")
-    await b.screenshot(".workcell/artifacts/20260429-132400-preview.png")
+    await b.screenshot(".workcell/artifacts/screenshots/20260429-132400-preview.png")
     logs = await b.get_console_logs()
 ```
 
@@ -107,7 +107,7 @@ For frontend work, visually verify the result when Chrome is available:
 
 Use screenshots for layout, responsive behavior, canvas rendering, and asset checks. Use `browser console` for runtime errors and warnings after page load and after interactions.
 
-Save temporary screenshots and other generated verification artifacts under `.workcell/artifacts/`. Prefer timestamped filenames such as `20260429-132400-dashboard.png`.
+Save temporary screenshots and other generated verification artifacts under `.workcell/artifacts/`. Use optional subdirectories such as `screenshots/`, `logs/`, and `mockups/` when they help organize related files. Prefer timestamped filenames such as `screenshots/20260429-132400-dashboard.png`.
 
 ## Troubleshooting
 

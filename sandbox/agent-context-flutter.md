@@ -104,7 +104,7 @@ flutterctl restart-bridge             # Restart the host bridge process
 flutterctl hot-reload                 # Hot reload
 flutterctl hot-restart                # Hot restart
 flutterctl logs                       # Recent Flutter logs
-flutterctl screenshot -o <path>       # Screenshot; use .workcell/artifacts/
+flutterctl screenshot -o <path>       # Screenshot; use .workcell/artifacts/screenshots/ when useful
 flutterctl ios-map                    # Diagnose iOS coordinate mapping when applicable
 flutterctl inspect                    # Discover visible UI state when supported
 flutterctl inspect --key <key>        # Inspect an automation id when supported
@@ -179,10 +179,10 @@ flutterctl launch --device <new-device>
 Screenshot example:
 
 ```bash
-flutterctl screenshot -o .workcell/artifacts/20260429-132400-before.png
+flutterctl screenshot -o .workcell/artifacts/screenshots/20260429-132400-before.png
 flutterctl hot-reload
 flutterctl wait --text "Updated Title"
-flutterctl screenshot -o .workcell/artifacts/20260429-132405-after.png
+flutterctl screenshot -o .workcell/artifacts/screenshots/20260429-132405-after.png
 ```
 
 `flutterctl hot-reload` and `flutterctl hot-restart` send `r`/`R` to the host Flutter process and
@@ -204,7 +204,7 @@ type, press, scroll, inspect, and wait. On macOS desktop, `status.screenshot.sup
 the bridge uses host `screencapture` against the Flutter app window; it does not mean Flutter's own
 `flutter screenshot` command supports macOS desktop.
 
-Save temporary screenshots and other generated verification artifacts under `.workcell/artifacts/`. Prefer timestamped filenames so repeated runs do not overwrite useful evidence.
+Save temporary screenshots and other generated verification artifacts under `.workcell/artifacts/`. Use optional subdirectories such as `screenshots/`, `logs/`, and `mockups/` when they help organize related files. Prefer timestamped filenames so repeated runs do not overwrite useful evidence.
 
 ## UI Automation
 
