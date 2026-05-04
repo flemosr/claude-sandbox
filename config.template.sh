@@ -12,9 +12,9 @@
 # auto-detects the host timezone and sets TZ for container-local logs and commits.
 # TZ="America/Los_Angeles"
 #
-# REQUIRED: Create a dedicated Chrome profile for Claude:
+# REQUIRED: Create a dedicated Chrome profile for agent-driven browser work:
 #   1. Open Chrome and click your profile icon (top-right)
-#   2. Click "Add" to create a new profile named "Claude"
+#   2. Click "Add" to create a new profile named "Agent"
 #   3. Go to chrome://version in the new profile
 #   4. Look at "Profile Path" - the last folder name is your profile
 #      (e.g., "Profile 3")
@@ -29,7 +29,7 @@ CHROME_USER_DATA="$HOME/Library/Application Support/Google/Chrome"
 # Separate directory for debug sessions (required for remote debugging)
 CHROME_DEBUG_DATA="$HOME/Library/Application Support/Google/Chrome-Debug"
 
-# Chrome profile directory name (create a dedicated "Claude" profile)
+# Chrome profile directory name (create a dedicated "Agent" profile)
 CHROME_PROFILE="CHANGE_ME"
 
 # External port for CDP (accessible from Docker via host.docker.internal)
