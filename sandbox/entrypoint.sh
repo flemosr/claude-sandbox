@@ -300,8 +300,13 @@ fi
 echo
 
 # Dispatch to the selected agent CLI.
-# AGENT_CLI is set by the host runner (run_sandbox.sh); defaults to claude.
-agent_cli="${AGENT_CLI:-claude}"
+# AGENT_CLI is set by the host runner (run_sandbox.sh). It is required so
+# launches cannot accidentally inherit an implicit tool choice.
+if [ -z "${AGENT_CLI:-}" ]; then
+  echo "Error: AGENT_CLI is required (expected 'claude', 'opencode', or 'codex')" >&2
+  exit 1
+fi
+agent_cli="$AGENT_CLI"
 case "$agent_cli" in
   claude|opencode|codex) ;;
   *)
