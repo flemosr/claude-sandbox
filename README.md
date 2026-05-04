@@ -1,13 +1,12 @@
 # agent workcell
 
 An opinionated, containerized environment for running TUI coding agents in YOLO mode, with
-Chrome integration, Flutter host bridge support, selective persistence, and isolated GPG-signed
-commits.
+Chrome and Flutter integrations, selective persistence, and isolated GPG-signed commits.
 
 Supports [Claude Code](https://claude.ai/code), [OpenCode](https://opencode.ai/), and
 [Codex](https://github.com/openai/codex), selectable per launch. It is geared toward Rust,
-Python, TypeScript, and Flutter development. A global context file is symlinked into each agent
-config so the agent is aware of the sandbox's capabilities and constraints.
+Python, TypeScript, and Dart/Flutter development. A global context file is symlinked into each
+agent config so the agent is aware of the sandbox's capabilities and constraints.
 
 ## Documentation
 
