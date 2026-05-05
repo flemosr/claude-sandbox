@@ -72,7 +72,7 @@ If the bridge is unavailable, tell the user they can either run `workcell start-
 
 If the bridge is reachable but running stale bridge code, use `flutterctl restart-bridge`. This authenticated command re-execs the existing host bridge process with the same launch settings.
 
-`--with-flutter` and `--with-chrome` are mutually exclusive. In Flutter mode, `--port <port>` selects the host Flutter bridge port and does not expose a container dev-server port.
+`--with-flutter` and `--with-chrome` are mutually exclusive. In Flutter mode, `--bridge-port <port>` selects the host Flutter bridge port and `--port <port>` exposes a container dev-server port.
 
 Connection details and optional launch settings live in `.workcell/flutter-config.json`:
 

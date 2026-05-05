@@ -66,7 +66,7 @@ If `$EXPOSED_PORTS` is set, dev servers on those ports are reachable from the ho
 `--with-chrome` and `--with-flutter` are mutually exclusive:
 
 - Chrome mode uses `--port` to expose container dev-server ports to host Chrome.
-- Flutter mode uses `--port` to select the host Flutter bridge port, not to expose container dev-server ports.
+- Flutter mode uses `--bridge-port` to select the host Flutter bridge port; `--port` still exposes container dev-server ports.
 
 ## Network Restrictions
 
