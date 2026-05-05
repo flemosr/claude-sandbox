@@ -115,8 +115,9 @@ workcell run codex "fix the tests"
 The first positional arg after `run` selects the agent and is required: `claude`, `opencode`, or
 `codex`. All agents use the same sandbox image, persistent Docker volume, and core flags.
 
-`--with-chrome` and `--with-flutter` are mutually exclusive. In Chrome mode, `--port` exposes
-container dev servers to the host. In Flutter mode, `--port` selects the host Flutter bridge port.
+`--with-chrome` and `--with-flutter` are mutually exclusive. `--port` exposes container dev
+servers to the host in all modes. In Flutter mode, use `--bridge-port` to select the host Flutter
+bridge port.
 
 `--yolo` maps to each agent's native bypass:
 
@@ -151,7 +152,8 @@ workcell start-chrome --port 9333 --profile "Profile 1"
 
 # Flutter native/device bridge
 workcell run claude --with-flutter
-workcell run codex --with-flutter --port 8765
+workcell run codex --with-flutter --bridge-port 8765
+workcell run codex --with-flutter --bridge-port 8766 --port 3000
 
 # Start the Flutter bridge independently on the host
 workcell start-flutter-bridge
@@ -226,8 +228,7 @@ Volume commands affect the persisted user data described below.
 - The container runs as a non-root `agent` user.
 - Filesystem access is isolated to the mounted project directory.
 - Host services are reachable from the container through `host.docker.internal`.
-- Dev server ports can be exposed with `--port <port>` except in Flutter mode, where `--port`
-  selects the host bridge port.
+- Dev server ports can be exposed with `--port <port>`.
 - `/opt/agent-context.md` is symlinked as `~/.claude/CLAUDE.md`,
   `~/.config/opencode/AGENTS.md`, and `~/.codex/AGENTS.md`; focused tool-specific context docs are
   available at `/opt/agent-context-web.md` and `/opt/agent-context-flutter.md`.

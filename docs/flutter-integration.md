@@ -63,9 +63,9 @@ Project-specific Flutter run settings can live in `.workcell/flutter-config.json
 ```
 
 The bridge updates the same file with runtime `token` and `port` values when it starts. When
-`--with-flutter` starts a bridge, the port is selected from:
+`--with-flutter` starts a bridge, the bridge port is selected from:
 
-1. `--port`, if supplied.
+1. `--bridge-port`, if supplied.
 2. `.workcell/flutter-config.json`.
 3. `FLUTTER_DEFAULT_BRIDGE_PORT`.
 4. `8765`.
@@ -86,16 +86,20 @@ This automatically:
 4. Mounts the bridge log file for troubleshooting.
 5. Cleans up the bridge started by the workcell when the session exits.
 
-Use `--port` to select the bridge port for one run:
+Use `--bridge-port` to select the bridge port for one run:
 
 ```bash
-workcell run claude --with-flutter --port 8765
-workcell run opencode --yolo --with-flutter --port 8766
+workcell run claude --with-flutter --bridge-port 8765
+workcell run opencode --yolo --with-flutter --bridge-port 8766
 ```
 
 `--with-flutter` and `--with-chrome` cannot be used together. Use `--with-chrome` for Flutter web
-and `--with-flutter` for native/device targets. In Flutter mode, `--port` is the host bridge port;
-it does not expose a container dev-server port.
+and `--with-flutter` for native/device targets. In Flutter mode, `--port` still exposes a container
+dev-server port to the host:
+
+```bash
+workcell run codex --with-flutter --bridge-port 8766 --port 3000
+```
 
 ## Start the Bridge Separately
 
@@ -272,8 +276,8 @@ Common issues:
 - Missing bridge token: when using `--with-flutter`, the token is auto-generated. For a separate
   bridge, start it from the workspace so `.workcell/flutter-config.json` is available.
 - Concurrent sandbox needs a bridge: start a separate bridge on a different port.
-- Port is already in use: use a different `--port`, update `.workcell/flutter-config.json`, or stop
-  the existing process.
+- Port is already in use: use a different `--bridge-port`, update `.workcell/flutter-config.json`,
+  or stop the existing process.
 - Flutter subprocess fails to start: ensure the project compiles and the target device is
   available. Run `flutter doctor -v` on the host.
 - Host bridge `flutter: command not found`: set host `FLUTTER_PATH` in `config.sh`.
